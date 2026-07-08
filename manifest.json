@@ -1,0 +1,49 @@
+{
+  "id": "wellness-check-in",
+  "name": "Wellness Check-In",
+  "version": "1.0.0",
+  "description": "A gentle daily 'I'm OK' check-in for someone living alone. They tap in on their own schedule; the care circle sees a shared status board, and if a check-in is missed past the window, designated family and contacts get an alert.",
+  "entrypoint": "index.html",
+  "runtime": "static",
+  "category": "family",
+  "tags": ["wellness", "check-in", "elder-care", "safety", "caregiving", "alerts"],
+  "icon": "💗",
+  "data_access": {
+    "reads": ["family.members", "app.contacts.contact_emails"],
+    "writes": []
+  },
+  "permissions": {
+    "default_audience": "everyone",
+    "requires_approval": false
+  },
+  "storage": "db",
+  "db_plaintext_columns": ["active", "interval_hours"],
+  "row_policies": {
+    "profiles": {
+      "kind": "adult_writable"
+    },
+    "checkins": {
+      "kind": "owner_only",
+      "member_column": "member_id",
+      "adults_bypass": true
+    }
+  },
+  "nav": { "label": "Wellness Check-In" },
+  "resource_limits": {
+    "max_db_bytes": 52428800
+  },
+  "required_capabilities": ["cron", "email"],
+  "inactivity_alerts": {
+    "table": "profiles",
+    "member_column": "member_id",
+    "id_column": "id",
+    "active_column": "active",
+    "interval_hours_column": "interval_hours",
+    "last_checkin_column": "last_checkin_at",
+    "last_alerted_column": "last_alerted_at",
+    "message_column": "message",
+    "recipients_column": "recipient_member_ids",
+    "external_recipients_column": "recipient_emails"
+  },
+  "external_contacts": {}
+}
