@@ -17,10 +17,13 @@
     "requires_approval": false
   },
   "storage": "db",
+  "contexts": ["household", "shared_space.roster"],
   "db_plaintext_columns": ["active", "interval_hours"],
   "row_policies": {
     "profiles": {
-      "kind": "adult_writable"
+      "kind": "adult_writable",
+      "member_read_column": "member_id",
+      "steward_writes_only": true
     },
     "checkins": {
       "kind": "owner_only",

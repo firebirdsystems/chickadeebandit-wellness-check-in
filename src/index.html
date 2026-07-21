@@ -162,6 +162,14 @@
     let noteDraft = "";
 
     const iAmAdult = () => isAdult(ME, members);
+    const IS_ADMIN  = window.__IS_ADMIN === true;
+    const IS_ROSTER = window.__SPACE_KIND === "roster";
+    // Who sets up and manages the monitored profiles. In a roster (a care
+    // coordinator's client list) that's the steward alone; each member only
+    // checks in for themselves. Elsewhere any adult in the care circle manages.
+    // Matches the hub profiles policy (adult_writable + member_read_column +
+    // steward_writes_only). Checking in is never gated — that's every member's.
+    const canSteward = () => IS_ROSTER ? IS_ADMIN : iAmAdult();
 
     async function db(sql, params = []) {
       if (!DB) return { rows: [] };
@@ -328,7 +336,7 @@
       const [cls, label] = STATE_PILL[status.state] ?? ["", ""];
       const streak = computeStreak(checkinsFor(p.member_id));
       const recent = checkinsFor(p.member_id).slice(0, 3);
-      const canManage = iAmAdult();
+      const canManage = canSteward();
       const isSelf = p.member_id === ME?.id;
       return `
         <div class="card board-card" data-pid="${esc(p.id)}">
@@ -371,9 +379,9 @@
         ${renderSelfCard()}
         <div class="board-head" style="margin: 6px 2px 10px">
           <h2 style="font-size:1rem">Care circle</h2>
-          ${iAmAdult() ? `<button class="btn btn-sm" data-add ${profiles.length >= MAX_PROFILES ? "disabled" : ""}>+ Add someone</button>` : ""}
+          ${canSteward() ? `<button class="btn btn-sm" data-add ${profiles.length >= MAX_PROFILES ? "disabled" : ""}>+ Add someone</button>` : ""}
         </div>
-        ${others.length ? others.map(renderBoardCard).join("") : `<div class="card empty">No check-in profiles yet.${iAmAdult() ? " Add someone to start." : ""}</div>`}
+        ${others.length ? others.map(renderBoardCard).join("") : `<div class="card empty">No check-in profiles yet.${canSteward() ? " Add someone to start." : ""}</div>`}
         <p class="footnote">Alerts are emailed to household members and to external contacts who confirmed by email (double opt-in).
           Monitoring runs on the hub’s servers — it works even when nobody has the app open.</p>`;
     }
@@ -417,7 +425,7 @@
     // ── arm / disarm / delete ─────────────────────────────────────────────────
 
     async function armProfile(id) {
-      if (!iAmAdult()) return;
+      if (!canSteward()) return;
       if (entitled === false) return flash({ err: "Monitoring needs the Premium bundle — ask an admin to upgrade." });
       try {
         await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
@@ -427,7 +435,7 @@
     }
 
     async function disarmProfile(id) {
-      if (!iAmAdult()) return;
+      if (!canSteward()) return;
       try {
         await db(`UPDATE ${T}profiles SET active = 0, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
         await loadProfiles();
@@ -436,7 +444,7 @@
     }
 
     async function deleteProfile(id) {
-      if (!iAmAdult()) return;
+      if (!canSteward()) return;
       const p = profiles.find(x => x.id === id);
       if (!(await hubConfirm({ message: `Delete ${profileTitle(p, members)}?`, description: "Monitoring stops immediately. Check-in history is kept.", confirmLabel: "Delete", destructive: true }))) return;
       try {
@@ -514,7 +522,7 @@
     }
 
     function openConfig(p) {
-      if (!iAmAdult()) return;
+      if (!canSteward()) return;
       if (p == null && membersWithoutProfile().length === 0) {
         return flash({ err: "Everyone already has a check-in profile." });
       }
