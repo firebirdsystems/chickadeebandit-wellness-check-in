@@ -17,7 +17,7 @@
     "requires_approval": false
   },
   "storage": "db",
-  "contexts": ["household", "shared_space.roster"],
+  "contexts": ["household", "shared_space", "shared_space.roster"],
   "db_plaintext_columns": ["active", "interval_hours"],
   "row_policies": {
     "profiles": {
