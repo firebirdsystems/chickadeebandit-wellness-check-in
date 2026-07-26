@@ -18,7 +18,7 @@
   },
   "storage": "db",
   "contexts": ["household", "shared_space", "shared_space.roster"],
-  "db_plaintext_columns": ["active", "interval_hours"],
+  "db_plaintext_columns": ["active", "interval_hours", "last_checkin_at", "last_alerted_at"],
   "row_policies": {
     "profiles": {
       "kind": "adult_writable",
