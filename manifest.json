@@ -19,6 +19,22 @@
   "storage": "db",
   "contexts": ["household", "shared_space", "shared_space.roster"],
   "db_plaintext_columns": ["active", "interval_hours", "last_checkin_at", "last_alerted_at"],
+    "member_references": {
+      "profiles": [
+        {
+          "column": "member_id",
+          "on_removed": "delete"
+        },
+        {
+          "column": "recipient_member_ids",
+          "on_removed": "prune_list"
+        }
+      ],
+      "checkins": {
+        "column": "member_id",
+        "on_removed": "delete"
+      }
+    },
   "row_policies": {
     "profiles": {
       "kind": "adult_writable",
