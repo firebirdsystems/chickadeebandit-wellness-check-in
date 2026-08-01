@@ -165,3 +165,14 @@ export function profileTitle(row, members) {
   if (row.label) return row.label;
   return who ? `${who}'s check-in` : "Check-in";
 }
+
+/**
+ * Fields the in-app search matches against (see hub-sdk `searchMatch`).
+ * A board card shows only the last three check-ins, so search is how
+ * an older note is reached. The caller passes in the person's name and
+ * their check-in text, since the profile row carries neither. Note the
+ * app loads the most recent 200 check-ins, so search covers those.
+ */
+export function searchableFields(profile, memberName = "", checkinText = "") {
+  return [profile.label, memberName, checkinText];
+}

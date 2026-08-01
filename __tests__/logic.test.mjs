@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   hoursToDays, daysToHours, intervalLabel, profileStatus, formatRemaining,
   computeStreak, validateConfig, recipientsSummary, profileTitle, moodMeta,
-  normalizeEmail, isValidEmail, MAX_EXTERNAL_RECIPIENTS,
+  normalizeEmail, isValidEmail, MAX_EXTERNAL_RECIPIENTS, searchableFields,
 } from "../src/logic.js";
 
 const HOUR = 3600 * 1000;
@@ -118,5 +118,13 @@ describe("misc", () => {
   it("formats remaining time", () => {
     expect(formatRemaining(2 * DAY + 3 * HOUR)).toBe("2d 3h");
     expect(formatRemaining(90 * 60 * 1000)).toBe("1h 30m");
+  });
+});
+
+describe("searchableFields", () => {
+  it("matches on the person's name and on what they wrote in a check-in", () => {
+    const fields = searchableFields({ label: "Mum" }, "Ada Lovelace", "dizzy again this morning");
+    expect(fields).toContain("Ada Lovelace");
+    expect(fields).toContain("dizzy again this morning");
   });
 });

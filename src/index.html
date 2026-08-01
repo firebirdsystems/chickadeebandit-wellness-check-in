@@ -122,6 +122,13 @@
     .empty { text-align: center; color: var(--muted); padding: 26px 14px; }
     .footnote { color: var(--muted); font-size: .8rem; margin-top: 18px; }
     @media (max-width: 520px) { .mood-btn { min-width: 0; } }
+    .search-row { margin-bottom: 12px; }
+    .search-input {
+      width: 100%; border: 1.5px solid var(--border-mid, var(--border, #d1d5db));
+      border-radius: 8px; padding: 9px 11px; font: inherit;
+      background: var(--surface, var(--card, #fff)); color: var(--text, inherit);
+    }
+    .search-input:focus { outline: none; border-color: var(--accent, #6366f1); }
   </style>
 </head>
 <body>
@@ -134,11 +141,11 @@
   </div>
 
   <script type="module">
-    import { esc, isAdult, memberColor, initial, hubAlert, hubConfirm } from "/hub-sdk.js";
+    import { esc, isAdult, memberColor, initial, hubAlert, hubConfirm, searchMatch } from "/hub-sdk.js";
     import {
       MOODS, moodMeta, hoursToDays, daysToHours, intervalLabel, profileStatus,
       formatRemaining, computeStreak, validateConfig, recipientsSummary, profileTitle,
-      normalizeEmail, isValidEmail, MAX_PROFILES, MAX_EXTERNAL_RECIPIENTS,
+      normalizeEmail, isValidEmail, MAX_PROFILES, MAX_EXTERNAL_RECIPIENTS, searchableFields,
     } from "./logic.js";
 
     const T = "app_wellness_check_in__";
@@ -153,6 +160,7 @@
     let members = [];
     let memberMap = new Map();
     let profiles = [];
+let searchQ = "";       // in-app search (see logic.js searchableFields)
     let checkins = [];               // rows visible to me (owner + adults see all)
     let entitled = null;             // null until the endpoint answers
     let externalContacts = new Map();// normalized email → { status, name }
@@ -335,7 +343,10 @@
       const status = profileStatus(p);
       const [cls, label] = STATE_PILL[status.state] ?? ["", ""];
       const streak = computeStreak(checkinsFor(p.member_id));
-      const recent = checkinsFor(p.member_id).slice(0, 3);
+      const all = checkinsFor(p.member_id);
+      const recent = searchQ
+        ? all.filter(c => searchMatch(searchQ, [c.note ?? "", c.mood ?? ""]))
+        : all.slice(0, 3);
       const canManage = canSteward();
       const isSelf = p.member_id === ME?.id;
       return `
@@ -369,10 +380,25 @@
       </div>`;
     }
 
+    // render() rewrites the whole view, so put the caret back after typing.
+    document.addEventListener("input", (e) => {
+      if (e.target.id !== "search") return;
+      searchQ = e.target.value;
+      const caret = e.target.selectionStart;
+      render();
+      const next = document.getElementById("search");
+      if (next) { next.focus(); next.setSelectionRange(caret, caret); }
+    });
+
     function render() {
       const root = document.getElementById("root");
       if (!ME) { root.innerHTML = `<div class="card empty">Sign in to use Wellness Check-In.</div>`; return; }
-      const others = profiles;
+      // A search keeps a card when the person matches OR anything they have
+      // written does, so typing a symptom surfaces who reported it.
+      const others = searchQ
+        ? profiles.filter(p => searchMatch(searchQ, searchableFields(
+            p, memberName(p.member_id), checkinsFor(p.member_id).map(c => c.note ?? "").join(" "))))
+        : profiles;
       root.innerHTML = `
         ${renderBanner()}
         ${renderMessages()}
@@ -381,7 +407,12 @@
           <h2 style="font-size:1rem">Care circle</h2>
           ${canSteward() ? `<button class="btn btn-sm" data-add ${profiles.length >= MAX_PROFILES ? "disabled" : ""}>+ Add someone</button>` : ""}
         </div>
-        ${others.length ? others.map(renderBoardCard).join("") : `<div class="card empty">No check-in profiles yet.${canSteward() ? " Add someone to start." : ""}</div>`}
+        ${profiles.length ? `<div class="search-row"><input id="search" class="search-input" type="search" placeholder="Search the care circle…" aria-label="Search the care circle" value="${esc(searchQ)}" /></div>` : ""}
+        ${others.length
+          ? others.map(renderBoardCard).join("")
+          : searchQ
+            ? `<div class="card empty">Nobody matches "${esc(searchQ)}".</div>`
+            : `<div class="card empty">No check-in profiles yet.${canSteward() ? " Add someone to start." : ""}</div>`}
         <p class="footnote">Alerts are emailed to household members and to external contacts who confirmed by email (double opt-in).
           Monitoring runs on the hub’s servers — it works even when nobody has the app open.</p>`;
     }
