@@ -170,6 +170,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     let noteDraft = "";
 
     const iAmAdult = () => isAdult(ME, members);
+    const EVENTS_URL = window.__EVENTS_URL ?? "/api/events";
     const IS_ADMIN  = window.__IS_ADMIN === true;
     const IS_ROSTER = window.__SPACE_KIND === "roster";
     // Who sets up and manages the monitored profiles. In a roster (a care
@@ -191,6 +192,20 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     }
 
     // ── loading ───────────────────────────────────────────────────────────────
+
+    /**
+     * Fire-and-forget publish. The coarse mood status travels (every adult can
+     * already read it); the member's free-text note never does — the bus is
+     * household-wide and reaches automations no one vetted for it.
+     */
+    async function publishEvent(type, subjectId, payload = {}) {
+      if (!EVENTS_URL) return;
+      await fetch(EVENTS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, subject_id: subjectId, payload }),
+      }).catch(() => {});
+    }
 
     async function loadMembers() {
       if (!CONTEXT) {
@@ -451,6 +466,12 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           [row.id, row.member_id, row.mood, row.note, row.checked_at])
           .catch(() => {}); // best-effort; the authoritative timer already reset
       }
+      // Deliberately excludes `note`.
+      publishEvent("wellness.checkin_submitted", ME.id, {
+        member_id: ME.id,
+        mood: row.mood,
+        checked_at: row.checked_at,
+      });
     }
 
     // ── arm / disarm / delete ─────────────────────────────────────────────────
