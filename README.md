@@ -1,5 +1,7 @@
 # Wellness Check-In
 
+A [Chickadee Bandit](https://chickadeebandit.com/app-library/wellness-check-in) app.
+
 A gentle daily "I'm OK" check-in for someone living alone (an aging parent, a
 partner who travels, a housemate recovering from surgery). The person taps in on
 their own schedule; the household care circle watches a shared status board; and
