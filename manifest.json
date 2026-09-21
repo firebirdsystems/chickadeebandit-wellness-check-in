@@ -53,6 +53,7 @@
   "agenda": {
     "kind": "routine",
     "label": "Check-in",
+    "on_range": "today_only",
     "source": {
       "kind": "sql",
       "query": "SELECT id AS id, COALESCE(NULLIF(label, ''), 'Wellness check-in') AS title, member_id AS member_id, :today AS when_at, CASE WHEN substr(last_checkin_at, 1, 10) = :today THEN 1 ELSE 0 END AS done FROM app_wellness_check_in__profiles WHERE active = 1 AND (last_checkin_at IS NULL OR last_checkin_at = '' OR substr(last_checkin_at, 1, 10) = :today OR date(last_checkin_at, '+' || interval_hours || ' hours') <= :today) ORDER BY created_at LIMIT 10"
