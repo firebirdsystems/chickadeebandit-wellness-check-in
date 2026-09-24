@@ -1,0 +1,129 @@
+{
+  "scenarios": [
+    {
+      "name": "a child sees only their own monitoring profile and cannot change it; an adult sees and configures every profile",
+      "members": { "parent": "adult", "childA": "child", "childB": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, label, active, interval_hours, message, recipient_member_ids, recipient_emails, created_at, updated_at) VALUES ('pa', ?, 'A daily', 1, 24, 'Please check on A', '[]', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), ('pb', ?, 'B daily', 1, 24, 'Please check on B', '[]', '[]', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+          "params": ["{{childA}}", "{{childB}}"]
+        },
+        {
+          "action": "db",
+          "as": "childA",
+          "sql": "SELECT id FROM app_wellness_check_in__profiles",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "pa" }] }
+        },
+        {
+          "action": "db",
+          "as": "childA",
+          "sql": "UPDATE app_wellness_check_in__profiles SET active = 0 WHERE id = ?",
+          "params": ["pa"],
+          "expect": { "status": 403 }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id FROM app_wellness_check_in__profiles ORDER BY id",
+          "expect": { "status": 200, "rowCount": 2, "rowsContain": [{ "id": "pa" }, { "id": "pb" }] }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "UPDATE app_wellness_check_in__profiles SET interval_hours = 12 WHERE id = ?",
+          "params": ["pb"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "childB",
+          "sql": "SELECT id, active, interval_hours FROM app_wellness_check_in__profiles",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "pb", "active": 1, "interval_hours": 12 }] }
+        }
+      ]
+    },
+    {
+      "name": "a profile's silence window must be positive",
+      "members": { "parent": "adult", "elder": "adult" },
+      "steps": [
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, label, active, interval_hours, message, created_at, updated_at) VALUES (?, ?, ?, 1, 0, ?, ?, ?)",
+          "params": ["p0", "{{elder}}", "Grandma", "Call her", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 400, "errorIncludes": "CHECK" }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, label, active, interval_hours, message, created_at, updated_at) VALUES (?, ?, ?, 1, 24, ?, ?, ?)",
+          "params": ["p1", "{{elder}}", "Grandma", "Call her", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id, interval_hours FROM app_wellness_check_in__profiles",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "p1", "interval_hours": 24 }] }
+        }
+      ]
+    },
+    {
+      "name": "a child sees only their own check-ins and cannot delete a sibling's; adults supervise everyone's",
+      "members": { "parent": "adult", "childA": "child", "childB": "child" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at) VALUES ('ca', ?, 'good', 'Fine', '2026-01-02T09:00:00Z'), ('cb', ?, 'low', 'Tired', '2026-01-02T09:30:00Z')",
+          "params": ["{{childA}}", "{{childB}}"]
+        },
+        {
+          "action": "db",
+          "as": "childA",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "ca" }] }
+        },
+        {
+          "action": "db",
+          "as": "childA",
+          "sql": "DELETE FROM app_wellness_check_in__checkins WHERE id = ?",
+          "params": ["cb"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "parent",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins ORDER BY id",
+          "expect": { "status": 200, "rowCount": 2, "rowsContain": [{ "id": "ca" }, { "id": "cb" }] }
+        }
+      ]
+    },
+    {
+      "name": "a check-in is always logged under the caller's own id, even if it names someone else",
+      "members": { "childA": "child", "childB": "child" },
+      "steps": [
+        {
+          "action": "db",
+          "as": "childA",
+          "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at) VALUES (?, ?, ?, ?, ?)",
+          "params": ["c1", "{{childB}}", "good", "All ok", "2026-01-02T09:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "childB",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins",
+          "expect": { "status": 200, "rowCount": 0 }
+        },
+        {
+          "action": "db",
+          "as": "childA",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins WHERE member_id = ?",
+          "params": ["{{childA}}"],
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "c1" }] }
+        }
+      ]
+    }
+  ]
+}
