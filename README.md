@@ -20,9 +20,9 @@ history and streak.
   (`POST /run/wellness-check-in/api/check-in`), which stamps `last_checkin_at` on
   that member's profile. The hub's hourly cron emails the recipients when a profile
   is overdue and stamps `last_alerted_at` to dedupe.
-- This requires the **Premium** capability bundle (`cron` + `email`). The check-in
-  endpoint returns `402` when the household isn't entitled; the UI shows an upgrade
-  banner and won't pretend an unmonitored profile is protected.
+- This uses the `cron` + `email` capabilities, which every live plan includes.
+  The check-in endpoint returns `402` while the household's plan is inactive; the
+  UI shows a renew banner and won't pretend an unmonitored profile is protected.
 
 ## Access model
 

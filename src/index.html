@@ -313,9 +313,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     function renderBanner() {
       if (entitled !== false) return "";
       return `<div class="banner buy">🔒 <strong>Monitoring isn’t active for your household yet.</strong>
-        Setting up profiles is free, but the hub-side monitoring and alert emails are part of the
-        <strong>Premium</strong> capability bundle. A household admin can upgrade from
-        <strong>Apps → Marketplace</strong>.</div>`;
+        Monitoring and alert emails are included with every plan, but they pause while the household's
+        subscription is inactive. A household admin can renew from <strong>Settings → Billing</strong>.</div>`;
     }
 
     function renderSelfCard() {
@@ -445,7 +444,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       try {
         res = await fetch(CHECK_IN, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       } catch { return flash({ err: "Couldn’t reach the check-in service. Try again." }); }
-      if (res.status === 402) { entitled = false; return flash({ err: "Monitoring needs the Premium bundle — ask an admin to upgrade." }); }
+      if (res.status === 402) { entitled = false; return flash({ err: "Monitoring is paused while the household's plan is inactive — ask an admin to renew." }); }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         return flash({ err: data.error ?? "Check-in failed." });
@@ -478,7 +477,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
 
     async function armProfile(id) {
       if (!canSteward()) return;
-      if (entitled === false) return flash({ err: "Monitoring needs the Premium bundle — ask an admin to upgrade." });
+      if (entitled === false) return flash({ err: "Monitoring is paused while the household's plan is inactive — ask an admin to renew." });
       try {
         await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
         await loadProfiles();
@@ -624,7 +623,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (known?.status !== "confirmed" && XC_INVITE) {
         try {
           const res = await fetch(XC_INVITE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: norm, name: name || undefined }) });
-          if (res.status === 402) { entitled = false; return modalError("Adding external contacts needs the Premium bundle."); }
+          if (res.status === 402) { entitled = false; return modalError("Adding external contacts needs an active plan."); }
           if (!res.ok) { const d = await res.json().catch(() => ({})); return modalError(d.error ?? "Couldn’t send the confirmation email."); }
           const { contact } = await res.json();
           if (contact) externalContacts.set(norm, { status: contact.status, name: contact.name || name || "" });
