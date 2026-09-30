@@ -17,6 +17,10 @@
     "requires_approval": false
   },
   "storage": "db",
+  "preload": {
+    "profiles": {"sql": "SELECT * FROM app_wellness_check_in__profiles ORDER BY created_at ASC"},
+    "checkins": {"sql": "SELECT * FROM app_wellness_check_in__checkins ORDER BY checked_at DESC LIMIT 200"}
+  },
   "contexts": ["household", "shared_space", "shared_space.roster"],
   "db_plaintext_columns": ["active", "interval_hours", "last_checkin_at", "last_alerted_at"],
     "member_references": {

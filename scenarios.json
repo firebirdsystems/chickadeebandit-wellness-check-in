@@ -124,6 +124,137 @@
           "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "c1" }] }
         }
       ]
+    },
+    {
+      "name": "in a shared space a participant adult sees only their own monitoring profile and check-ins and cannot remove another's check-in, while the steward sees and supervises every member's",
+      "context": "shared_space",
+      "members": { "a": "adult", "b": "adult", "steward": "admin" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, label, active, interval_hours, created_at, updated_at) VALUES ('pf-a', ?, 'A', 1, 24, '2026-09-01T09:00:00Z', '2026-09-01T09:00:00Z')",
+          "params": ["{{a}}"]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, label, active, interval_hours, created_at, updated_at) VALUES ('pf-b', ?, 'B', 1, 24, '2026-09-01T09:00:00Z', '2026-09-01T09:00:00Z')",
+          "params": ["{{b}}"]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at) VALUES ('ci-a', ?, 'ok', '2026-09-02T09:00:00Z')",
+          "params": ["{{a}}"]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at) VALUES ('ci-b', ?, 'ok', '2026-09-02T09:00:00Z')",
+          "params": ["{{b}}"]
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "SELECT id FROM app_wellness_check_in__profiles",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "pf-a" }] }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "ci-a" }] }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "DELETE FROM app_wellness_check_in__checkins WHERE id = 'ci-b'",
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "b",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "id": "ci-b" }] }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "SELECT id FROM app_wellness_check_in__profiles ORDER BY id",
+          "expect": { "status": 200, "rowCount": 2, "rowsContain": [{ "id": "pf-a" }, { "id": "pf-b" }] }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins ORDER BY id",
+          "expect": { "status": 200, "rowCount": 2, "rowsContain": [{ "id": "ci-a" }, { "id": "ci-b" }] }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "DELETE FROM app_wellness_check_in__checkins WHERE id = 'ci-b'",
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "b",
+          "sql": "SELECT id FROM app_wellness_check_in__checkins",
+          "expect": { "status": 200, "rowCount": 0 }
+        }
+      ]
+    },
+    {
+      "name": "in a shared space a participant adult cannot pause another member's monitoring or redirect its alert emails",
+      "context": "shared_space",
+      "members": { "a": "adult", "b": "adult", "steward": "admin" },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, active, recipient_emails, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+          "params": ["pf-b", "{{b}}", 1, "[]", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"]
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "UPDATE app_wellness_check_in__profiles SET active = 0, recipient_emails = ? WHERE id = ?",
+          "params": ["[\"x@example.com\"]", "pf-b"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "DELETE FROM app_wellness_check_in__profiles WHERE id = ?",
+          "params": ["pf-b"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "steward",
+          "sql": "SELECT id, active, recipient_emails FROM app_wellness_check_in__profiles",
+          "expect": {
+            "status": 200,
+            "rowCount": 1,
+            "rowsContain": [{ "id": "pf-b", "active": 1, "recipient_emails": "[]" }]
+          }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+          "params": ["pf-a", "{{a}}", 1, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "UPDATE app_wellness_check_in__profiles SET interval_hours = 12 WHERE id = ?",
+          "params": ["pf-a"],
+          "expect": { "status": 200 }
+        },
+        {
+          "action": "db",
+          "as": "a",
+          "sql": "SELECT interval_hours FROM app_wellness_check_in__profiles",
+          "expect": { "status": 200, "rowCount": 1, "rowsContain": [{ "interval_hours": 12 }] }
+        }
+      ]
     }
   ]
 }
