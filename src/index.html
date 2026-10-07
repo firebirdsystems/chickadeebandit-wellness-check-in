@@ -144,14 +144,14 @@
 <body>
   <div class="app">
     <div class="header">
-      <h1>💗 Wellness Check-In</h1>
+      <h1><span id="page-glyph"></span> Wellness Check-In</h1>
       <p class="subtitle">A gentle daily “I’m OK”. If a check-in is missed, the care circle is told — and can see who is following up.</p>
     </div>
     <div id="root"><div class="empty">Loading…</div></div>
   </div>
 
   <script type="module">
-    import { esc, isAdult, memberColor, initial, hubAlert, hubConfirm, searchMatch, hubToday, hubTimeZone, sendHubNotification } from "/hub-sdk.js";
+    import { esc, isAdult, memberColor, initial, hubAlert, hubConfirm, searchMatch, hubToday, hubTimeZone, sendHubNotification, glyph } from "/hub-sdk.js";
     import {
       MOODS, moodMeta, hoursToDays, daysToHours, intervalLabel, profileStatus,
       formatRemaining, computeStreak, validateConfig, recipientsSummary, profileTitle,
@@ -160,6 +160,8 @@
       formatClock, requestKind, requestState, canClaim, canResolve, canCancel,
       requestStatusLine, sortRequests, validateNote, missedSourceKey, missedCheckins, notifyAudience, checkinDateFor,
     } from "./logic.js";
+
+    document.getElementById("page-glyph").innerHTML = glyph("pulse-heart");
 
     const T = "app_wellness_check_in__";
     const DB = window.__DB_URL ?? "";
@@ -359,7 +361,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
 
     function renderBanner() {
       if (entitled !== false) return "";
-      return `<div class="banner buy">🔒 <strong>Monitoring isn’t active for your household yet.</strong>
+      return `<div class="banner buy">${glyph("lock")} <strong>Monitoring isn’t active for your household yet.</strong>
         Monitoring and alert emails are included with every plan, but they pause while the household's
         subscription is inactive. A household admin can renew from <strong>Settings → Billing</strong>.</div>`;
     }
@@ -378,7 +380,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
             <span class="pill ${cls}">${esc(label)}</span>
           </div>
           <p class="board-meta">${statusDetail(p, status)}</p>
-          ${streak > 0 ? `<div class="streak">🔥 <strong>${streak}-day</strong> streak — keep it going.</div>` : ""}
+          ${streak > 0 ? `<div class="streak">${glyph("flame")} <strong>${streak}-day</strong> streak — keep it going.</div>` : ""}
           <div class="mood-row">
             ${MOODS.map(m => `
               <button class="mood-btn" data-checkin-mood="${esc(m.key)}" ${disabled ? "disabled" : ""}>
@@ -405,17 +407,17 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           ${mine.map(r => `
             <div class="req">
               <div class="req-head">
-                <span class="req-title">${esc(requestKind(r.kind).emoji)} ${esc(r.kind === "call" ? "You asked for a call" : `Your ${requestKind(r.kind).label}`)}</span>
+                <span class="req-title">${glyph(requestKind(r.kind).glyph)} ${esc(r.kind === "call" ? "You asked for a call" : `Your ${requestKind(r.kind).label}`)}</span>
                 <span class="pill ${requestState(r) === "claimed" ? "good" : "warn"}">${esc(requestStatusLine(r, memberName))}</span>
               </div>
               ${canCancel(r, ME.id) ? `<div class="row-actions" style="margin-top:6px"><button class="btn-ghost btn-sm" data-req-cancel="${esc(r.id)}">Never mind</button></div>` : ""}
             </div>`).join("")}
           ${lastDone ? `
             <div class="req">
-              <p class="board-meta">✓ ${esc(requestStatusLine(lastDone, memberName))} ${esc(fmtAgo(lastDone.closed_at))}</p>
+              <p class="board-meta">${glyph("tick")} ${esc(requestStatusLine(lastDone, memberName))} ${esc(fmtAgo(lastDone.closed_at))}</p>
               ${lastDone.followup_note ? `<div class="req-note">${esc(lastDone.followup_note)}</div>` : ""}
             </div>` : ""}
-          ${callOut ? "" : `<div class="row-actions"><button class="btn-ghost btn-call" data-req-call>📞 Request a family call</button></div>`}
+          ${callOut ? "" : `<div class="row-actions"><button class="btn-ghost btn-call" data-req-call>${glyph("phone")} Request a family call</button></div>`}
         </div>`;
     }
 
@@ -463,7 +465,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       return `
         <div class="req">
           <div class="req-head">
-            <span class="req-title">${esc(kind.emoji)} ${esc(kind.headline(memberName(r.member_id)))}</span>
+            <span class="req-title">${glyph(kind.glyph)} ${esc(kind.headline(memberName(r.member_id)))}</span>
             <span class="pill ${pill[0]}">${esc(pill[1])}</span>
           </div>
           <div class="board-meta">${esc(fmtAgo(state === "done" ? r.closed_at : r.created_at))}</div>
@@ -516,7 +518,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
             </div>
             <span class="pill ${cls}">${esc(label)}</span>
           </div>
-          ${streak > 0 ? `<div class="streak">🔥 ${streak}-day streak</div>` : ""}
+          ${streak > 0 ? `<div class="streak">${glyph("flame")} ${streak}-day streak</div>` : ""}
           ${recent.length ? `<div class="history">${recent.map(renderHistoryItem).join("")}</div>` : `<p class="board-meta" style="margin-top:8px">No check-ins logged yet.</p>`}
           ${canManage ? `
             <div class="row-actions">

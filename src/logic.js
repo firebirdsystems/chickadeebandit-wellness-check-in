@@ -294,13 +294,13 @@ export function instantFromLocal(day, minutes, timeZone = null) {
 export const MAX_NOTE_LENGTH = 500;
 
 const REQUEST_KINDS = {
-  call: { emoji: "📞", label: "call request", headline: (name) => `${name} asked for a call` },
-  missed_checkin: { emoji: "⏰", label: "missed check-in", headline: (name) => `${name} missed a check-in` },
-  missed_dose: { emoji: "💊", label: "missed dose", headline: (name) => `${name} missed a dose` },
+  call: { glyph: "phone", label: "call request", headline: (name) => `${name} asked for a call` },
+  missed_checkin: { glyph: "clock", label: "missed check-in", headline: (name) => `${name} missed a check-in` },
+  missed_dose: { glyph: "pill", label: "missed dose", headline: (name) => `${name} missed a dose` },
 };
 
 export function requestKind(kind) {
-  return REQUEST_KINDS[kind] ?? { emoji: "•", label: "request", headline: (name) => `${name} needs a hand` };
+  return REQUEST_KINDS[kind] ?? { glyph: "dot", label: "request", headline: (name) => `${name} needs a hand` };
 }
 
 /**
