@@ -121,6 +121,16 @@
     .notice { background: var(--green-soft); color: var(--green); padding: 9px 12px; border-radius: 8px; margin: 8px 0; font-size: .86rem; }
     .empty { text-align: center; color: var(--muted); padding: 26px 14px; }
     .footnote { color: var(--muted); font-size: .8rem; margin-top: 18px; }
+    .call-row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .btn-call { width: 100%; min-height: 46px; font-size: 1rem; }
+    .req { display: grid; gap: 4px; }
+    .req + .req { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .req-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .req-title { font-weight: 700; }
+    .req-note { font-size: .9rem; }
+    .hand-card { border-color: var(--hub-tint-warning-border, #fde68a); }
+    details.handled summary { cursor: pointer; font-weight: 700; font-size: .9rem; }
+    details.handled .req { margin-top: 10px; }
     @media (max-width: 520px) { .mood-btn { min-width: 0; } }
     .search-row { margin-bottom: 12px; }
     .search-input {
@@ -135,17 +145,20 @@
   <div class="app">
     <div class="header">
       <h1>💗 Wellness Check-In</h1>
-      <p class="subtitle">A gentle daily “I’m OK”. If a check-in is missed, the care circle gets an alert.</p>
+      <p class="subtitle">A gentle daily “I’m OK”. If a check-in is missed, the care circle is told — and can see who is following up.</p>
     </div>
     <div id="root"><div class="empty">Loading…</div></div>
   </div>
 
   <script type="module">
-    import { esc, isAdult, memberColor, initial, hubAlert, hubConfirm, searchMatch } from "/hub-sdk.js";
+    import { esc, isAdult, memberColor, initial, hubAlert, hubConfirm, searchMatch, hubToday, hubTimeZone, sendHubNotification } from "/hub-sdk.js";
     import {
       MOODS, moodMeta, hoursToDays, daysToHours, intervalLabel, profileStatus,
       formatRemaining, computeStreak, validateConfig, recipientsSummary, profileTitle,
       normalizeEmail, isValidEmail, MAX_PROFILES, MAX_EXTERNAL_RECIPIENTS, searchableFields,
+      GRACE_MINUTES, MAX_NOTE_LENGTH, agreedTime, checkinTimesValue, timedAlertValue, reminderTitle,
+      formatClock, requestKind, requestState, canClaim, canResolve, canCancel,
+      requestStatusLine, sortRequests, validateNote, missedSourceKey, missedCheckins, notifyAudience, checkinDateFor,
     } from "./logic.js";
 
     const T = "app_wellness_check_in__";
@@ -162,6 +175,7 @@
     let profiles = [];
 let searchQ = "";       // in-app search (see logic.js searchableFields)
     let checkins = [];               // rows visible to me (owner + adults see all)
+    let requests = [];               // hand-offs visible to me (same rule as check-ins)
     let entitled = null;             // null until the endpoint answers
     let externalContacts = new Map();// normalized email → { status, name }
     let contactsBook = [];           // [{name, email}] quick-adds from contacts app
@@ -250,6 +264,33 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       checkins = rows ?? [];
     }
 
+    async function loadRequests() {
+      if (!DB) {
+        requests = [{
+          id: "demo-r1", member_id: "demo-1", kind: "missed_dose", status: "claimed", note: "",
+          claimed_by: "demo-2", claimed_at: new Date(Date.now() - 20 * 60000).toISOString(),
+          followup_note: "", closed_at: null, source_event_id: "demo", created_at: new Date(Date.now() - 50 * 60000).toISOString(),
+        }];
+        return;
+      }
+      // Two reads, because they are bounded for different reasons. Unfinished
+      // work is never traded away for history: under one shared limit, enough
+      // closed requests would push an open one off the board with no way left
+      // to take it. Oldest first, so the cap could only ever drop the newest.
+      const [open, handled] = await Promise.all([
+        db(`SELECT * FROM ${T}requests WHERE status <> 'done' ORDER BY created_at ASC LIMIT 200`),
+        db(`SELECT * FROM ${T}requests WHERE status = 'done' ORDER BY created_at DESC LIMIT 50`),
+      ]);
+      requests = [...(open.rows ?? []), ...(handled.rows ?? [])];
+    }
+
+    // Everything the board derives from, re-read together: a missed check-in is
+    // computed from profiles and check-ins, so refreshing requests alone would
+    // keep offering one the person has since answered from another device.
+    async function refreshBoard() {
+      await Promise.all([loadProfiles(), loadCheckins(), loadRequests()]);
+    }
+
     async function loadEntitlement() {
       try {
         const res = await fetch(CHECK_IN);
@@ -290,6 +331,12 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     function contactName(email) {
       const norm = normalizeEmail(email);
       return externalContacts.get(norm)?.name || contactsBook.find(c => c.email === norm)?.name || "";
+    }
+    function profileFor(memberId) { return profiles.find(p => p.member_id === memberId) ?? null; }
+    function missedNow() {
+      return missedCheckins(profiles, checkins, requests, {
+        today: hubToday(), now: Date.now(), timeZone: hubTimeZone(), dayOf: iso => hubToday(new Date(iso)),
+      });
     }
     function fmtAgo(iso) {
       if (!iso) return "never";
@@ -342,10 +389,107 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
             <textarea id="note-draft" maxlength="500" placeholder="Add a note for your care circle (optional)">${esc(noteDraft)}</textarea>
           </div>
           <p class="hint">One tap resets your clock and lets everyone know you’re OK.</p>
+          ${renderSelfRequests()}
+        </div>`;
+    }
+
+    // What the person sees about themselves: the call button, and who has
+    // picked up anything raised for them. They read it; relatives act on it.
+    function renderSelfRequests() {
+      const mine = sortRequests(requests.filter(r => r.member_id === ME.id && requestState(r) !== "done"));
+      const callOut = mine.some(r => r.kind === "call");
+      const lastDone = requests.find(r => r.member_id === ME.id && requestState(r) === "done"
+        && Date.now() - Date.parse(r.closed_at) < 24 * 3600 * 1000);
+      return `
+        <div class="call-row">
+          ${mine.map(r => `
+            <div class="req">
+              <div class="req-head">
+                <span class="req-title">${esc(requestKind(r.kind).emoji)} ${esc(r.kind === "call" ? "You asked for a call" : `Your ${requestKind(r.kind).label}`)}</span>
+                <span class="pill ${requestState(r) === "claimed" ? "good" : "warn"}">${esc(requestStatusLine(r, memberName))}</span>
+              </div>
+              ${canCancel(r, ME.id) ? `<div class="row-actions" style="margin-top:6px"><button class="btn-ghost btn-sm" data-req-cancel="${esc(r.id)}">Never mind</button></div>` : ""}
+            </div>`).join("")}
+          ${lastDone ? `
+            <div class="req">
+              <p class="board-meta">✓ ${esc(requestStatusLine(lastDone, memberName))} ${esc(fmtAgo(lastDone.closed_at))}</p>
+              ${lastDone.followup_note ? `<div class="req-note">${esc(lastDone.followup_note)}</div>` : ""}
+            </div>` : ""}
+          ${callOut ? "" : `<div class="row-actions"><button class="btn-ghost btn-call" data-req-call>📞 Request a family call</button></div>`}
+        </div>`;
+    }
+
+    // The relatives' side: everything that still needs someone, unclaimed first.
+    function renderNeedsAHand() {
+      const open = sortRequests(requests.filter(r => r.member_id !== ME.id && requestState(r) !== "done"));
+      const missed = canSteward() ? missedNow().filter(m => m.profile.member_id !== ME.id) : [];
+      const handled = requests.filter(r => r.member_id !== ME.id && requestState(r) === "done").slice(0, 5);
+      if (!open.length && !missed.length && !handled.length) return "";
+      return `
+        ${open.length || missed.length ? `
+          <div class="board-head" style="margin: 6px 2px 10px"><h2 style="font-size:1rem">Needs a hand</h2></div>
+          <div class="card hand-card">
+            ${missed.map(renderMissedItem).join("")}
+            ${open.map(renderRequestItem).join("")}
+          </div>` : ""}
+        ${handled.length ? `
+          <details class="card handled">
+            <summary>Recently handled (${handled.length})</summary>
+            ${handled.map(renderRequestItem).join("")}
+          </details>` : ""}`;
+    }
+
+    function renderMissedItem({ profile: p, reason, date }) {
+      const why = reason === "agreed"
+        ? `Agreed time was ${formatClock(agreedTime(p))}${date === hubToday() ? "" : " yesterday"} · last check-in ${fmtAgo(p.last_checkin_at)}`
+        : `No check-in for ${formatRemaining(Date.now() - Date.parse(p.last_checkin_at))} · expected ${intervalLabel(p.interval_hours)}`;
+      return `
+        <div class="req">
+          <div class="req-head">
+            <span class="req-title">⏰ ${esc(memberName(p.member_id))} hasn’t checked in</span>
+            <span class="pill warn">Unclaimed</span>
+          </div>
+          <div class="board-meta">${esc(why)}</div>
+          <div class="row-actions" style="margin-top:6px"><button class="btn btn-sm" data-req-claim-missed="${esc(p.id)}">I’ve got this</button></div>
+        </div>`;
+    }
+
+    function renderRequestItem(r) {
+      const state = requestState(r);
+      const kind = requestKind(r.kind);
+      const pill = state === "open" ? ["warn", "Unclaimed"]
+        : state === "claimed" ? ["good", r.claimed_by === ME.id ? "You’re handling this" : `${memberName(r.claimed_by)} is handling this`]
+        : ["", r.claimed_by === ME.id ? "You followed up" : `${memberName(r.claimed_by)} followed up`];
+      return `
+        <div class="req">
+          <div class="req-head">
+            <span class="req-title">${esc(kind.emoji)} ${esc(kind.headline(memberName(r.member_id)))}</span>
+            <span class="pill ${pill[0]}">${esc(pill[1])}</span>
+          </div>
+          <div class="board-meta">${esc(fmtAgo(state === "done" ? r.closed_at : r.created_at))}</div>
+          ${r.note ? `<div class="req-note">“${esc(r.note)}”</div>` : ""}
+          ${r.followup_note ? `<div class="req-note">${esc(r.followup_note)}</div>` : ""}
+          ${canClaim(r, ME.id, canSteward()) || canResolve(r, ME.id) ? `
+            <div class="row-actions" style="margin-top:6px">
+              ${canClaim(r, ME.id, canSteward()) ? `<button class="btn btn-sm" data-req-claim="${esc(r.id)}">I’ve got this</button>` : ""}
+              ${canResolve(r, ME.id) ? `
+                <button class="btn btn-sm" data-req-close="${esc(r.id)}">Record follow-up</button>
+                <button class="btn-ghost btn-sm" data-req-release="${esc(r.id)}">Hand back</button>` : ""}
+            </div>` : ""}
         </div>`;
     }
 
     function statusDetail(p, status) {
+      return `${windowDetail(p, status)}${agreedDetail(p)}`;
+    }
+
+    function agreedDetail(p) {
+      const time = agreedTime(p);
+      if (!time || Number(p.active) !== 1) return "";
+      return ` Agreed time ${esc(formatClock(time))}: a reminder then, and the care circle hears ${GRACE_MINUTES} minutes later if there’s still no check-in.`;
+    }
+
+    function windowDetail(p, status) {
       const who = recipientsSummary(JSON.parse(p.recipient_member_ids || "[]"), members, p.member_id, JSON.parse(p.recipient_emails || "[]"));
       if (status.state === "disarmed") return "Monitoring is paused.";
       if (status.state === "unstarted") return `Monitoring is on (${esc(intervalLabel(p.interval_hours))}) — waiting for the first check-in.`;
@@ -368,7 +512,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           <div class="board-head">
             <div>
               <div class="board-title">${esc(profileTitle(p, members))}</div>
-              <div class="board-meta">${esc(isSelf ? "You" : memberName(p.member_id))} · last check-in ${esc(fmtAgo(p.last_checkin_at))}</div>
+              <div class="board-meta">${esc(isSelf ? "You" : memberName(p.member_id))} · last check-in ${esc(fmtAgo(p.last_checkin_at))}${agreedTime(p) ? ` · agreed time ${esc(formatClock(agreedTime(p)))}` : ""}</div>
             </div>
             <span class="pill ${cls}">${esc(label)}</span>
           </div>
@@ -417,6 +561,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         ${renderBanner()}
         ${renderMessages()}
         ${renderSelfCard()}
+        ${renderNeedsAHand()}
         <div class="board-head" style="margin: 6px 2px 10px">
           <h2 style="font-size:1rem">Care circle</h2>
           ${canSteward() ? `<button class="btn btn-sm" data-add ${profiles.length >= MAX_PROFILES ? "disabled" : ""}>+ Add someone</button>` : ""}
@@ -455,15 +600,28 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const now = new Date().toISOString();
       const idx = profiles.findIndex(x => x.id === p.id);
       if (idx !== -1) profiles[idx] = { ...profiles[idx], last_checkin_at: now };
-      const row = { id: crypto.randomUUID(), member_id: ME.id, mood, note, checked_at: now };
+      // checkin_date is the HOUSEHOLD's day the check-in answers (last night's,
+      // inside a late agreed time's grace) and slot the agreed time: together
+      // with profile_id they are what the hub matches to see that today's agreed
+      // check-in happened, so it neither reminds nor tells the care circle.
+      const row = {
+        id: crypto.randomUUID(), member_id: ME.id, mood, note, checked_at: now,
+        profile_id: p.id, slot: agreedTime(p) ?? "",
+        checkin_date: checkinDateFor(p, hubToday(), Date.now(), hubTimeZone()),
+      };
       checkins = [row, ...checkins];
       noteDraft = "";
       flash({ ok: "Checked in — thanks for letting everyone know." });
-      // 3. Persist the display-only history row (owner_only forces member_id to me).
+      // 3. Persist the history row (owner_only forces member_id to me). The
+      //    silence window already reset above; with an agreed time this row is
+      //    also what stands the reminder down, so a failure there is said out
+      //    loud — the cost of staying quiet is a false alarm to the family.
       if (DB) {
-        db(`INSERT INTO ${T}checkins (id, member_id, mood, note, checked_at) VALUES (?, ?, ?, ?, ?)`,
-          [row.id, row.member_id, row.mood, row.note, row.checked_at])
-          .catch(() => {}); // best-effort; the authoritative timer already reset
+        db(`INSERT INTO ${T}checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [row.id, row.member_id, row.mood, row.note, row.checked_at, row.profile_id, row.checkin_date, row.slot])
+          .catch(() => {
+            if (row.slot) flash({ err: "You’re checked in, but today’s reminder didn’t get the message. Tap again so nobody is alerted by mistake." });
+          });
       }
       // Deliberately excludes `note`.
       publishEvent("wellness.checkin_submitted", ME.id, {
@@ -471,6 +629,183 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         mood: row.mood,
         checked_at: row.checked_at,
       });
+    }
+
+    // ── requests: ask, take, hand back, follow up ─────────────────────────────
+
+    // Ids only on the bus, never the note: it is household-wide and reaches
+    // automations nobody vetted for a person's own words.
+    function announce(type, r) {
+      publishEvent(type, r.member_id, { member_id: r.member_id, request_id: r.id, kind: r.kind });
+    }
+
+    function tell(r, title, body, key) {
+      if (!DB) return;
+      sendHubNotification({
+        title, body,
+        audience: notifyAudience(profileFor(r.member_id), ME.id, iAmAdult()),
+        url: `/run/${APP_ID}`,
+        idempotencyKey: `${APP_ID}:${key}:${r.id}`,
+      });
+    }
+
+    function openCallForm() {
+      openModal(`
+        <h2>Request a family call</h2>
+        <p class="hint">Your care circle is told right away, and you’ll see here who is going to call.</p>
+        <div class="error" data-el="error" hidden></div>
+        <label for="rq-note">Anything they should know? (optional)</label>
+        <textarea id="rq-note" maxlength="${MAX_NOTE_LENGTH}" placeholder="e.g. Nothing urgent, I’d just like to talk."></textarea>
+        <div class="actions">
+          <button class="btn" data-action="send-call">Ask for a call</button>
+          <span class="spacer"></span>
+          <button class="btn-ghost" data-action="cancel" type="button">Cancel</button>
+        </div>`);
+    }
+
+    let sendingCall = false;
+    async function requestCall() {
+      if (sendingCall) return;
+      const note = modalEl.querySelector("#rq-note").value.trim();
+      const err = validateNote(note);
+      if (err) return modalError(err);
+      sendingCall = true;
+      const r = {
+        id: crypto.randomUUID(), member_id: ME.id, kind: "call", status: "open", note,
+        claimed_by: null, claimed_at: null, followup_note: "", closed_at: null,
+        source_event_id: null, created_at: new Date().toISOString(),
+      };
+      try {
+        await db(`INSERT INTO ${T}requests (id, member_id, kind, status, note, opened_on, created_at) VALUES (?, ?, 'call', 'open', ?, ?, ?)`,
+          [r.id, r.member_id, r.note, hubToday(), r.created_at]);
+      } catch (e) {
+        sendingCall = false;
+        return modalError(e.message);
+      }
+      sendingCall = false;
+      requests = [r, ...requests];
+      closeModal();
+      flash({ ok: "Your care circle has been asked to call." });
+      announce("wellness.call_requested", r);
+      // The reason is the person's own words: previews off (the default) show
+      // the generic line on a locked screen, the inbox shows the rest.
+      if (DB) sendHubNotification({
+        title: `${ME.name ?? "Someone"} would like a call`,
+        body: note || "Open Wellness Check-In to say you’ve got it.",
+        generic: note ? { body: "Open Wellness Check-In to say you’ve got it." } : undefined,
+        audience: notifyAudience(myProfile(), ME.id, iAmAdult()),
+        url: `/run/${APP_ID}`,
+        idempotencyKey: `${APP_ID}:call:${r.id}`,
+      });
+    }
+
+    async function cancelRequest(id) {
+      try {
+        await db(`DELETE FROM ${T}requests WHERE id = ? AND status = 'open'`, [id]);
+        await loadRequests();
+        flash({ ok: "Call request withdrawn." });
+      } catch (e) { flash({ err: e.message }); }
+    }
+
+    // Two relatives can tap at the same moment. The WHERE lets exactly one of
+    // them win; a refused write still answers 200, so `changed` is the answer.
+    async function claimRequest(id) {
+      const now = new Date().toISOString();
+      try {
+        const res = await db(
+          `UPDATE ${T}requests SET status = 'claimed', claimed_by = ?, claimed_at = ?
+           WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL))`,
+          [ME.id, now, id]);
+        await loadRequests();
+        const r = requests.find(x => x.id === id);
+        if (DB && !res.changed) {
+          return flash({ err: r && requestState(r) !== "open"
+            ? `${memberName(r.claimed_by)} already has this one.` : "That request is no longer open." });
+        }
+        flash({ ok: "It’s yours. Record what happened when you’ve followed up." });
+        if (r) {
+          announce("wellness.request_claimed", r);
+          tell(r, `${ME.name ?? "Someone"} is handling it`, `${requestKind(r.kind).headline(memberName(r.member_id))}.`, "claimed");
+        }
+      } catch (e) { flash({ err: e.message }); }
+    }
+
+    // A missed check-in has no row until someone takes it. The source key is
+    // unique, so a second relative's insert is refused rather than doubled.
+    async function claimMissed(profileId) {
+      // Decide on what is true now, not on what was true when the board was
+      // drawn: they may have checked in, or someone else may have taken it.
+      try { await refreshBoard(); } catch { return flash({ err: "Couldn’t reach the hub. Try again." }); }
+      const missed = missedNow().find(m => m.profile.id === profileId);
+      if (!missed) return flash({ ok: "No need — that check-in is no longer missed." });
+      const p = missed.profile;
+      const now = new Date().toISOString();
+      const r = {
+        id: crypto.randomUUID(), member_id: p.member_id, kind: "missed_checkin", status: "claimed",
+        claimed_by: ME.id, source_event_id: missedSourceKey(p.id, missed.date),
+      };
+      try {
+        await db(`INSERT INTO ${T}requests (id, member_id, kind, status, claimed_by, claimed_at, source_event_id, opened_on, created_at) VALUES (?, ?, 'missed_checkin', 'claimed', ?, ?, ?, ?, ?)`,
+          [r.id, r.member_id, r.claimed_by, now, r.source_event_id, hubToday(), now]);
+      } catch {
+        await loadRequests();
+        return flash({ err: "Someone else just took this one." });
+      }
+      await loadRequests();
+      flash({ ok: "It’s yours. Record what happened when you’ve followed up." });
+      announce("wellness.request_claimed", r);
+      tell(r, `${ME.name ?? "Someone"} is handling it`, `${requestKind(r.kind).headline(memberName(r.member_id))}.`, "claimed");
+    }
+
+    async function releaseRequest(id) {
+      try {
+        const res = await db(
+          `UPDATE ${T}requests SET status = 'open', claimed_by = NULL, claimed_at = NULL
+           WHERE id = ? AND status = 'claimed' AND claimed_by = ?`, [id, ME.id]);
+        await loadRequests();
+        if (DB && !res.changed) return flash({ err: "That request isn’t yours to hand back any more." });
+        flash({ ok: "Handed back — it’s open for someone else." });
+        const r = requests.find(x => x.id === id);
+        if (r) {
+          announce("wellness.request_released", r);
+          // Keyed on the moment: the same request can be handed back twice.
+          tell(r, "Still needs someone", `${requestKind(r.kind).headline(memberName(r.member_id))}, and ${ME.name ?? "a relative"} can’t take it after all.`, `released:${Date.now()}`);
+        }
+      } catch (e) { flash({ err: e.message }); }
+    }
+
+    function openFollowUp(id) {
+      const r = requests.find(x => x.id === id);
+      if (!r) return;
+      openModal(`
+        <h2>Record follow-up</h2>
+        <p class="hint">${esc(requestKind(r.kind).headline(memberName(r.member_id)))}. What happened? The care circle and ${esc(memberName(r.member_id))} can read this.</p>
+        <div class="error" data-el="error" hidden></div>
+        <label for="rq-follow">Follow-up note</label>
+        <textarea id="rq-follow" maxlength="${MAX_NOTE_LENGTH}" placeholder="e.g. Called at 2:15, all fine — the phone was in another room."></textarea>
+        <div class="actions">
+          <button class="btn" data-action="save-follow" data-id="${esc(r.id)}">Mark as followed up</button>
+          <span class="spacer"></span>
+          <button class="btn-ghost" data-action="cancel" type="button">Cancel</button>
+        </div>`);
+    }
+
+    async function closeRequest(id) {
+      const note = modalEl.querySelector("#rq-follow").value.trim();
+      const err = validateNote(note, { required: true });
+      if (err) return modalError(err);
+      try {
+        const res = await db(
+          `UPDATE ${T}requests SET status = 'done', followup_note = ?, closed_at = ?
+           WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
+          [note, new Date().toISOString(), id, ME.id]);
+        await loadRequests();
+        closeModal();
+        if (DB && !res.changed) return flash({ err: "That request isn’t yours to close any more." });
+        flash({ ok: "Follow-up recorded." });
+        const r = requests.find(x => x.id === id);
+        if (r) announce("wellness.request_closed", r);
+      } catch (e) { modalError(e.message); }
     }
 
     // ── arm / disarm / delete ─────────────────────────────────────────────────
@@ -547,6 +882,9 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           <input id="cf-days" type="number" min="0.5" max="14" step="0.5" style="width:110px" value="${esc(String(hoursToDays(p?.interval_hours ?? 24)))}" />
           <span class="muted">day(s)</span>
         </div>
+        <label for="cf-time">Agreed check-in time (optional)</label>
+        <input id="cf-time" type="time" style="width:150px" value="${esc(agreedTime(p) ?? "")}" />
+        <p class="hint">They get a reminder at this time each day. If there’s still no check-in ${GRACE_MINUTES} minutes later, the people below are told and can say who is following up.</p>
         <label for="cf-message">Message to include in the alert</label>
         <textarea id="cf-message" maxlength="2000" placeholder="What should they know or do? (optional)">${esc(p?.message ?? "")}</textarea>
         <label>Who gets alerted</label>
@@ -642,6 +980,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         label: modalEl.querySelector("#cf-label").value.trim(),
         intervalDays: Number(modalEl.querySelector("#cf-days").value),
         message: modalEl.querySelector("#cf-message").value.trim(),
+        checkinTime: modalEl.querySelector("#cf-time").value,
         recipientIds: [...modalEl.querySelectorAll('[data-el="recipients"] input:checked')].map(i => i.value),
         recipientEmails: [...modalEmails],
       };
@@ -651,15 +990,18 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const btn = modalEl.querySelector('[data-action="save"]');
       if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
       const now = new Date().toISOString();
+      // The three columns the agreed-time reminder reads, always written with
+      // the recipients they are derived from so the two can't drift on a save.
+      const timed = [checkinTimesValue(cfg.checkinTime), reminderTitle(cfg.label, memberMap.get(subjectId)?.name), timedAlertValue(cfg.recipientIds)];
       try {
         if (existingId) {
-          await db(`UPDATE ${T}profiles SET label = ?, interval_hours = ?, message = ?, recipient_member_ids = ?, recipient_emails = ?, updated_at = ? WHERE id = ?`,
-            [cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), now, existingId]);
+          await db(`UPDATE ${T}profiles SET label = ?, interval_hours = ?, message = ?, recipient_member_ids = ?, recipient_emails = ?, checkin_times = ?, reminder_title = ?, timed_alert_member_ids = ?, updated_at = ? WHERE id = ?`,
+            [cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), ...timed, now, existingId]);
         } else {
           const id = crypto.randomUUID();
-          await db(`INSERT INTO ${T}profiles (id, member_id, label, active, interval_hours, message, recipient_member_ids, recipient_emails, created_at, updated_at)
-                    VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
-            [id, subjectId, cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), now, now]);
+          await db(`INSERT INTO ${T}profiles (id, member_id, label, active, interval_hours, message, recipient_member_ids, recipient_emails, checkin_times, reminder_title, timed_alert_member_ids, created_at, updated_at)
+                    VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, subjectId, cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), ...timed, now, now]);
         }
         await loadProfiles();
         closeModal();
@@ -667,6 +1009,27 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       } catch (e) {
         if (btn) { btn.disabled = false; btn.textContent = existingId ? "Save" : "Add"; }
         modalError(e.message);
+      }
+    }
+
+    /**
+     * When a chosen relative leaves the household the hub prunes them from both
+     * recipient lists. Pruning the LAST one leaves "[]" — "all adults" to the
+     * silence window, but "nobody" to the agreed-time reminder. Put that back
+     * to blank the next time someone who manages profiles opens the app, so a
+     * departure can't quietly switch a reminder's escalation off.
+     */
+    async function healTimedAudience() {
+      if (!DB || !canSteward()) return;
+      for (const p of profiles) {
+        let ids = [];
+        try { ids = JSON.parse(p.recipient_member_ids || "[]"); } catch { continue; }
+        const want = timedAlertValue(Array.isArray(ids) ? ids : []);
+        if ((p.timed_alert_member_ids ?? "") === want) continue;
+        try {
+          await db(`UPDATE ${T}profiles SET timed_alert_member_ids = ? WHERE id = ?`, [want, p.id]);
+          p.timed_alert_member_ids = want;
+        } catch { /* not ours to fix (a participant in a shared space) */ }
       }
     }
 
@@ -685,6 +1048,12 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (btn.hasAttribute("data-arm")) return void armProfile(btn.getAttribute("data-arm"));
       if (btn.hasAttribute("data-disarm")) return void disarmProfile(btn.getAttribute("data-disarm"));
       if (btn.hasAttribute("data-delete")) return void deleteProfile(btn.getAttribute("data-delete"));
+      if (btn.hasAttribute("data-req-call")) return void openCallForm();
+      if (btn.hasAttribute("data-req-cancel")) return void cancelRequest(btn.getAttribute("data-req-cancel"));
+      if (btn.hasAttribute("data-req-claim")) return void claimRequest(btn.getAttribute("data-req-claim"));
+      if (btn.hasAttribute("data-req-claim-missed")) return void claimMissed(btn.getAttribute("data-req-claim-missed"));
+      if (btn.hasAttribute("data-req-release")) return void releaseRequest(btn.getAttribute("data-req-release"));
+      if (btn.hasAttribute("data-req-close")) return void openFollowUp(btn.getAttribute("data-req-close"));
     });
 
     document.addEventListener("click", e => {
@@ -693,6 +1062,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const action = btn.dataset.action;
       if (action === "cancel") return closeModal();
       if (action === "save") return void saveConfig(btn.dataset.id || null);
+      if (action === "send-call") return void requestCall();
+      if (action === "save-follow") return void closeRequest(btn.dataset.id);
       if (action === "add-external") {
         const emailEl = modalEl.querySelector('[data-el="ext-email"]');
         const nameEl = modalEl.querySelector('[data-el="ext-name"]');
@@ -711,10 +1082,25 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     // ── init ──────────────────────────────────────────────────────────────────
 
     (async function init() {
-      await Promise.all([loadMembers(), loadProfiles(), loadCheckins(), loadEntitlement(), loadExternalContacts(), loadContactsBook()]);
+      await Promise.all([loadMembers(), loadProfiles(), loadCheckins(), loadRequests(), loadEntitlement(), loadExternalContacts(), loadContactsBook()]);
       if (!ME && !CONTEXT) ME = members[0] ?? null; // demo mode: act as the first member
       render();
-      setInterval(() => { if (!modalEl) render(); }, 60_000); // keep countdowns fresh
+      healTimedAudience();
+      // Every minute: re-read the board, then redraw (which also keeps the
+      // countdowns fresh). Unconditionally — an empty board is exactly the one
+      // that has to notice a call request arriving, and a relative with the app
+      // open should not have to reload to see it. Paused only while the tab is
+      // hidden, and caught up the moment it is shown again.
+      let refreshing = false;
+      const tick = async () => {
+        if (modalEl || refreshing) return;
+        refreshing = true;
+        try { await refreshBoard(); } catch { /* offline: redraw what we have */ }
+        refreshing = false;
+        if (!modalEl) render();
+      };
+      setInterval(() => { if (!document.hidden) tick(); }, 60_000);
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
     })();
   </script>
 </body>

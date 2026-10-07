@@ -2,7 +2,7 @@
   "id": "wellness-check-in",
   "name": "Wellness Check-In",
   "version": "1.2.0",
-  "description": "A gentle daily 'I'm OK' check-in for someone living alone. They tap in on their own schedule; the care circle sees a shared status board, and if a check-in is missed past the window, designated family and contacts get an alert.",
+  "description": "A gentle daily 'I'm OK' check-in for someone living alone. They tap in on their own schedule or at an agreed time, and can ask for a family call. The care circle sees a shared board; when a check-in is missed, a dose goes unlogged or a call is requested, one relative takes it, everyone sees who, and the follow-up is recorded.",
   "entrypoint": "index.html",
   "runtime": "static",
   "category": "family",
@@ -19,10 +19,17 @@
   "storage": "db",
   "preload": {
     "profiles": {"sql": "SELECT * FROM app_wellness_check_in__profiles ORDER BY created_at ASC"},
-    "checkins": {"sql": "SELECT * FROM app_wellness_check_in__checkins ORDER BY checked_at DESC LIMIT 200"}
+    "checkins": {"sql": "SELECT * FROM app_wellness_check_in__checkins ORDER BY checked_at DESC LIMIT 200"},
+    "requests_open": {"sql": "SELECT * FROM app_wellness_check_in__requests WHERE status <> 'done' ORDER BY created_at ASC LIMIT 200"},
+    "requests_handled": {"sql": "SELECT * FROM app_wellness_check_in__requests WHERE status = 'done' ORDER BY created_at DESC LIMIT 50"}
   },
   "contexts": ["household", "shared_space", "shared_space.roster"],
-  "db_plaintext_columns": ["active", "interval_hours", "last_checkin_at", "last_alerted_at"],
+  "db_plaintext_columns": [
+    "active", "interval_hours", "last_checkin_at", "last_alerted_at",
+    "checkin_times", "timed_alert_member_ids",
+    "profile_id", "checkin_date", "slot",
+    "kind", "status", "claimed_by", "source_event_id", "opened_on"
+  ],
     "member_references": {
       "profiles": [
         {
@@ -32,12 +39,26 @@
         {
           "column": "recipient_member_ids",
           "on_removed": "prune_list"
+        },
+        {
+          "column": "timed_alert_member_ids",
+          "on_removed": "prune_list"
         }
       ],
       "checkins": {
         "column": "member_id",
         "on_removed": "delete"
-      }
+      },
+      "requests": [
+        {
+          "column": "member_id",
+          "on_removed": "delete"
+        },
+        {
+          "column": "claimed_by",
+          "on_removed": "null"
+        }
+      ]
     },
   "row_policies": {
     "profiles": {
@@ -50,19 +71,85 @@
       "member_column": "member_id",
       "adults_bypass": true,
       "retain_days": { "default": 365, "timestamp_column": "checked_at", "override_key": "checkin_history" }
+    },
+    "requests": {
+      "kind": "owner_only",
+      "member_column": "member_id",
+      "adults_bypass": true,
+      "retain_days": { "default": 365, "timestamp_column": "created_at", "override_key": "request_history" }
     }
   },
-  "publishes": ["wellness.checkin_submitted"],
+  "publishes": [
+    "wellness.checkin_submitted",
+    "wellness.call_requested",
+    "wellness.request_claimed",
+    "wellness.request_released",
+    "wellness.request_closed"
+  ],
+  "automation_actions": {
+    "open_request": {
+      "title": "Ask the care circle to follow up",
+      "description": "Put a request on the Wellness Check-In board when something was missed \u2014 a dose that went unlogged, a check-in that never came. It stays open until one relative takes it, and everyone else can see who did.",
+      "params": {
+        "member": { "type": "member", "label": "Who it is about", "required": true },
+        "kind": {
+          "type": "text",
+          "label": "What was missed",
+          "options": ["missed_dose", "missed_checkin"],
+          "default": "missed_dose"
+        }
+      },
+      "dedupe": { "table": "requests", "column": "source_event_id" },
+      "steps": [
+        {
+          "op": "insert",
+          "table": "requests",
+          "values": {
+            "id": "$uuid",
+            "member_id": ":member",
+            "kind": ":kind",
+            "status": "open",
+            "created_at": "$now",
+            "source_event_id": "$event_id"
+          }
+        }
+      ]
+    }
+  },
+  "suggested_automations": [
+    {
+      "title": "Hand a missed dose to a relative",
+      "description": "When a scheduled dose in Medications is still unlogged after its grace window, a request appears on the Wellness Check-In board. One relative takes it and records what happened; everyone else sees it is handled. The event carries no medication name, so neither does the request.",
+      "trigger_event": "medication.dose_missed",
+      "target_app_id": "wellness-check-in",
+      "action_id": "open_request",
+      "param_map": {
+        "member": { "kind": "payload_field", "value": "member_id" },
+        "kind": { "kind": "const", "value": "missed_dose" }
+      }
+    }
+  ],
   "nav": { "label": "Wellness Check-In" },
-  "agenda": {
-    "kind": "routine",
-    "label": "Check-in",
-    "on_range": "today_only",
-    "source": {
-      "kind": "sql",
-      "query": "SELECT id AS id, COALESCE(NULLIF(label, ''), 'Wellness check-in') AS title, member_id AS member_id, :today AS when_at, CASE WHEN substr(last_checkin_at, 1, 10) = :today THEN 1 ELSE 0 END AS done FROM app_wellness_check_in__profiles WHERE active = 1 AND (last_checkin_at IS NULL OR last_checkin_at = '' OR substr(last_checkin_at, 1, 10) = :today OR date(last_checkin_at, '+' || interval_hours || ' hours') <= :today) ORDER BY created_at LIMIT 10"
+  "agenda": [
+    {
+      "kind": "routine",
+      "label": "Check-in",
+      "on_range": "today_only",
+      "source": {
+        "kind": "sql",
+        "query": "SELECT id AS id, COALESCE(NULLIF(label, ''), 'Wellness check-in') AS title, member_id AS member_id, :today AS when_at, CASE WHEN substr(last_checkin_at, 1, 10) = :today THEN 1 ELSE 0 END AS done FROM app_wellness_check_in__profiles WHERE active = 1 AND (last_checkin_at IS NULL OR last_checkin_at = '' OR substr(last_checkin_at, 1, 10) = :today OR date(last_checkin_at, '+' || interval_hours || ' hours') <= :today) ORDER BY created_at LIMIT 10"
+      }
+    },
+    {
+      "kind": "task",
+      "label": "Wellness · Follow-up",
+      "on_range": "today_only",
+      "source": {
+        "kind": "sql",
+        "query": "SELECT id AS id, CASE kind WHEN 'call' THEN 'Family call requested' WHEN 'missed_dose' THEN 'Follow up on a missed dose' ELSE 'Follow up on a missed check-in' END AS title, :today AS when_at, 0 AS done, CASE WHEN status = 'claimed' THEN claimed_by ELSE NULL END AS member_id FROM app_wellness_check_in__requests WHERE status <> 'done' AND (opened_on IS NULL OR opened_on <= :today) ORDER BY created_at LIMIT 10"
+      }
     }
-  },
+  ],
   "glance": {
     "source": {
       "kind": "sql",
@@ -86,5 +173,23 @@
     "recipients_column": "recipient_member_ids",
     "external_recipients_column": "recipient_emails"
   },
-  "external_contacts": {}
+  "external_contacts": {},
+  "schedule_reminders": {
+    "table": "profiles",
+    "id_column": "id",
+    "title_column": "reminder_title",
+    "owner_column": "member_id",
+    "enabled_column": "active",
+    "times_column": "checkin_times",
+    "completion": {
+      "table": "checkins",
+      "parent_fk_column": "profile_id",
+      "date_column": "checkin_date",
+      "slot_column": "slot",
+      "member_column": "member_id"
+    },
+    "nudge": { "at_minutes": 0, "audience": "owner" },
+    "escalation": { "grace_minutes": 60, "audience": "adults", "member_column": "timed_alert_member_ids" },
+    "on_no_recipients": "adults"
+  }
 }

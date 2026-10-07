@@ -145,3 +145,104 @@ if (manifest.ai_access) {
     });
   }
 }
+
+// ── hand-offs and the agreed time ─────────────────────────────────────────────
+// Things the hub's validators cannot see, because each is a fact about how this
+// app's own pieces line up rather than about one manifest key.
+
+describe("requests and the agreed-time reminder", () => {
+  const logic = readFileSync(join(__dirname, "../src/logic.js"), "utf-8");
+  const html = readFileSync(join(__dirname, "../src/index.html"), "utf-8");
+  const migration = readFileSync(join(__dirname, "../migrations/003_requests_and_agreed_time.sql"), "utf-8");
+  const reminders = manifest.schedule_reminders;
+  const plaintext = new Set(manifest.db_plaintext_columns);
+
+  it("the board waits exactly as long as the hub does before calling a check-in missed", () => {
+    const grace = Number(/export const GRACE_MINUTES = (\d+);/.exec(logic)?.[1]);
+    expect(grace).toBe(reminders.escalation.grace_minutes);
+  });
+
+  it("the timed audience is its own column, never the silence window's list", () => {
+    // recipient_member_ids stores "[]" for "all adults"; the reminder protocol
+    // reads "[]" as "nobody". Pointing it there would switch escalation off for
+    // every profile that left the default.
+    expect(reminders.escalation.member_column).toBe("timed_alert_member_ids");
+    expect(manifest.inactivity_alerts.recipients_column).toBe("recipient_member_ids");
+    expect(migration).toMatch(/timed_alert_member_ids TEXT NOT NULL DEFAULT ''/);
+  });
+
+  it("a check-in writes the three columns the reminder matches on", () => {
+    const { parent_fk_column, date_column, slot_column } = reminders.completion;
+    const insert = /INSERT INTO \$\{T\}checkins \(([^)]*)\)/.exec(html)?.[1] ?? "";
+    for (const column of [parent_fk_column, date_column, slot_column]) {
+      expect(insert.split(",").map(c => c.trim()), column).toContain(column);
+      expect(plaintext.has(column), `${column} is compared in SQL`).toBe(true);
+    }
+  });
+
+  it("every column a request is filtered or deduped on is plaintext", () => {
+    for (const column of ["status", "kind", "claimed_by", "source_event_id"]) {
+      expect(plaintext.has(column), column).toBe(true);
+    }
+  });
+
+  it("the automation can only open a request, and never raises a call on someone's behalf", () => {
+    const action = manifest.automation_actions.open_request;
+    expect(action.steps.map(s => s.op)).toEqual(["insert"]);
+    expect(action.steps[0].values.status).toBe("open");
+    expect(action.params.kind.options).not.toContain("call");
+    expect(action.dedupe).toEqual({ table: "requests", column: "source_event_id" });
+  });
+
+  it("ships no rule on inactivity.alert_fired", () => {
+    // The hub publishes that event for every app with a check-in switch, as
+    // source "hub", so a rule cannot be pinned to this app's own alerts. The
+    // board shows its own missed check-ins directly instead (missedCheckins).
+    const triggers = manifest.suggested_automations.map(s => s.trigger_event);
+    expect(triggers).toEqual(["medication.dose_missed"]);
+  });
+
+  it("the glance reads one table", () => {
+    // A second governed table inside a subquery is refused at run time, and
+    // the hub then shows an empty card rather than an error.
+    expect(manifest.glance.source.query.match(/FROM /g)).toHaveLength(1);
+  });
+
+  it("unfinished requests are never read under a limit shared with history", () => {
+    // One list capped across every status lets closed requests push an open
+    // one off the board, where nobody can take it.
+    const open = manifest.preload.requests_open.sql;
+    const handled = manifest.preload.requests_handled.sql;
+    expect(open).toMatch(/WHERE status <> 'done' ORDER BY created_at ASC/);
+    expect(handled).toMatch(/WHERE status = 'done'/);
+    expect(Object.values(manifest.preload).map(p => p.sql).filter(q => /__requests/.test(q) && !/WHERE status/.test(q))).toEqual([]);
+  });
+
+  it("the board re-reads everything a missed check-in is derived from, whatever it currently shows", () => {
+    const refresh = /async function refreshBoard\(\) \{([\s\S]*?)\n    \}/.exec(html)?.[1] ?? "";
+    for (const loader of ["loadProfiles()", "loadCheckins()", "loadRequests()"]) expect(refresh, loader).toContain(loader);
+    const tick = /const tick = async \(\) => \{([\s\S]*?)\n      \};/.exec(html)?.[1] ?? "";
+    expect(tick).toContain("refreshBoard()");
+    // Not gated on what is already loaded: an empty board must still poll.
+    expect(html).toMatch(/setInterval\(\(\) => \{ if \(!document\.hidden\) tick\(\); \}, 60_000\)/);
+    expect(tick).not.toMatch(/requests\.(some|length)/);
+  });
+
+  it("the person a request is about can read the follow-up note the form promises them", () => {
+    const self = /function renderSelfRequests\(\) \{([\s\S]*?)\n    \}\n/.exec(html)?.[1] ?? "";
+    expect(self).toContain("lastDone.followup_note");
+    expect(html).toMatch(/The care circle and \$\{esc\(memberName\(r\.member_id\)\)\} can read this/);
+  });
+
+  it("publishes every event the app sends", () => {
+    const sent = [...html.matchAll(/(?:publishEvent|announce)\("([a-z_.]+)"/g)].map(m => m[1]);
+    expect(sent.length).toBeGreaterThan(0);
+    for (const type of sent) expect(manifest.publishes, type).toContain(type);
+  });
+
+  it("no event carries a person's own words", () => {
+    const body = /function announce\(type, r\) \{([\s\S]*?)\n    \}/.exec(html)?.[1] ?? "";
+    expect(body).toContain("publishEvent");
+    expect(body).not.toMatch(/note/);
+  });
+});

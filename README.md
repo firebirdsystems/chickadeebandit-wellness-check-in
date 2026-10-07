@@ -4,9 +4,12 @@ A [Chickadee Bandit](https://chickadeebandit.com/app-library/wellness-check-in) 
 
 A gentle daily "I'm OK" check-in for someone living alone (an aging parent, a
 partner who travels, a housemate recovering from surgery). The person taps in on
-their own schedule; the household care circle watches a shared status board; and
-if a check-in is missed past the configured window, designated family members and
-external contacts get an alert email.
+their own schedule or at an agreed time of day, and can ask for a family call.
+The household care circle watches a shared status board; if a check-in is missed
+past the configured window, designated family members and external contacts get
+an alert email. Anything that needs someone — a missed check-in, a missed dose, a
+call request — stays on the board until one relative takes it, shows everyone
+who has it, and closes with a note about what happened.
 
 The positive, caregiver-facing counterpart to **Check-In Switch** (dead-mans-switch):
 that app is private and self-owned; this one is a shared care tool with a visible
@@ -24,6 +27,37 @@ history and streak.
   The check-in endpoint returns `402` while the household's plan is inactive; the
   UI shows a renew banner and won't pretend an unmonitored profile is protected.
 
+## Agreed time
+
+A profile may also carry an agreed time of day (`checkin_times`), driven by the
+hub's `schedule_reminders` protocol: the person gets a push at that time, and if
+there is still no check-in 60 minutes later the chosen relatives are told. A
+check-in on that household day stands both down — it is matched on
+`checkins.profile_id` / `checkin_date` / `slot`, which is why the app writes them.
+
+The silence window stays on as the backstop. The two use different audience
+columns on purpose: `recipient_member_ids` stores `[]` for "all adults", but the
+reminder protocol reads an explicit `[]` as "nobody", so the agreed-time lane
+reads `timed_alert_member_ids`, which is blank for "all adults" and never `[]`.
+
+## Requests: who is handling it
+
+`requests` holds a call request, a missed check-in or a missed dose. A row is
+`open` until a relative taps **I've got this**, `claimed` while they hold it
+(they can hand it back), and `done` once they record the follow-up.
+
+- A call request is written when the person taps **Request a family call**; the
+  chosen relatives are notified.
+- A missed check-in (agreed time or silence window) is shown on the board
+  without a row; the row is written when a relative takes it. Its
+  `source_event_id` is `checkin:<profile>:<household day>` and unique, so two
+  relatives tapping at once open one request.
+- A missed dose arrives from the Medications app through the suggested
+  automation on `medication.dose_missed` (`automation_actions.open_request`).
+  A household admin turns it on in Automations.
+
+Open requests also appear on the Today list, under whoever took them.
+
 ## Access model
 
 - `profiles` — `adult_writable`: the whole household (the care circle) reads the
@@ -31,6 +65,11 @@ history and streak.
 - `checkins` — `owner_only` (`adults_bypass: true`): display-only history for the
   board. `INSERT` forces `member_id` to the caller, so a member can only log their
   own check-ins; adults (caregivers) can read everyone's history.
+
+- `requests` — `owner_only` (`adults_bypass: true`): the person a request is about
+  reads it and can raise or withdraw their own call request; adults read and
+  handle everyone's (the steward alone in a shared space). Claims are guarded in
+  SQL (`WHERE status = 'open'`), so a second claim changes nothing.
 
 The authoritative escalation timer is `profiles.last_checkin_at`, written by the
 trusted hub endpoint — the `checkins` log is for the streak/history display only.

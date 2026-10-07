@@ -124,6 +124,7 @@ export function validateConfig(cfg) {
     return `Choose a check-in window between ${hoursToDays(MIN_INTERVAL_HOURS)} and ${hoursToDays(MAX_INTERVAL_HOURS)} days.`;
   }
   if ((cfg.message ?? "").length > 2000) return "Message is too long.";
+  if (cfg.checkinTime && parseClockTime(cfg.checkinTime) === null) return "Enter the agreed time as a time of day.";
   if ((cfg.recipientEmails?.length ?? 0) > MAX_EXTERNAL_RECIPIENTS) {
     return `You can add up to ${MAX_EXTERNAL_RECIPIENTS} external contacts.`;
   }
@@ -175,4 +176,280 @@ export function profileTitle(row, members) {
  */
 export function searchableFields(profile, memberName = "", checkinText = "") {
   return [profile.label, memberName, checkinText];
+}
+
+// ── agreed time ─────────────────────────────────────────────────────────────
+// A profile may carry an agreed time of day on top of its silence window. The
+// hub's schedule_reminders protocol nudges the person at that time and, when
+// there is still no check-in GRACE_MINUTES later, tells the care circle. The
+// number mirrors manifest.schedule_reminders.escalation.grace_minutes — the
+// board only shows a check-in as missed once the hub has said so too.
+
+export const GRACE_MINUTES = 60;
+
+/** "HH:MM" → minutes since midnight, or null when it is not a clock time. */
+export function parseClockTime(value) {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(value ?? "").trim());
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
+/** The profile's agreed time as "HH:MM", or null when it has none. */
+export function agreedTime(profile) {
+  let times;
+  try { times = JSON.parse(profile?.checkin_times || "[]"); } catch { return null; }
+  if (!Array.isArray(times)) return null;
+  return times.find(t => parseClockTime(t) !== null) ?? null;
+}
+
+/** What is stored in profiles.checkin_times for a time input's value. */
+export function checkinTimesValue(time) {
+  return parseClockTime(time) === null ? "[]" : JSON.stringify([String(time).trim()]);
+}
+
+/**
+ * What is stored in profiles.timed_alert_member_ids.
+ *
+ * Blank, never "[]", when nobody is picked: the reminder protocol reads an
+ * explicit empty list as "this lane is switched off", where this app's own
+ * recipients list has always meant "all adults" when empty.
+ */
+export function timedAlertValue(recipientIds) {
+  const ids = (recipientIds ?? []).filter(id => typeof id === "string" && id);
+  return ids.length ? JSON.stringify(ids) : "";
+}
+
+/** The name a reminder notification uses for this profile. */
+export function reminderTitle(label, memberName) {
+  const own = String(label ?? "").trim();
+  if (own) return own;
+  return memberName ? `${memberName}'s check-in` : "Check-in";
+}
+
+export function formatClock(time) {
+  const minutes = parseClockTime(time);
+  if (minutes === null) return "";
+  const h = Math.floor(minutes / 60);
+  const m = String(minutes % 60).padStart(2, "0");
+  return `${h % 12 === 0 ? 12 : h % 12}:${m} ${h < 12 ? "AM" : "PM"}`;
+}
+
+function zoneOffsetMs(ts, timeZone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(ts));
+  const f = {};
+  for (const p of parts) if (p.type !== "literal") f[p.type] = Number(p.value);
+  // Date.UTC of the LOCAL wall-clock reading minus the real instant is the offset.
+  return Date.UTC(f.year, f.month - 1, f.day, f.hour % 24, f.minute, f.second) - (ts - (ts % 1000));
+}
+
+/**
+ * The instant (ms) at which the household's clock reads `day` ("yyyy-mm-dd")
+ * at `minutes` past midnight.
+ *
+ * An agreed time is a wall-clock time, but the grace after it is ELAPSED time:
+ * the hub resolves the occurrence to an instant and adds real minutes. Adding
+ * minutes to the wall-clock reading instead is only right while the offset
+ * holds still — on the night the clocks go forward, 01:30 plus an hour of
+ * wall clock is 03:00, which is thirty real minutes later.
+ *
+ * Mirrors the hub's own resolution (household-date.ts `utcFromLocalTime`), so
+ * the board and the scheduler agree to the minute: a time repeated when the
+ * clocks go back is the EARLIER of the two; one skipped when they go forward
+ * moves on by the size of the gap (02:30 → 03:30).
+ *
+ * Without a usable zone it reads the device's clock, like the SDK's hubToday.
+ */
+export function instantFromLocal(day, minutes, timeZone = null) {
+  const [y, m, d] = String(day).split("-").map(Number);
+  if (timeZone) {
+    try {
+      const wall = Date.UTC(y, m - 1, d) + minutes * 60_000;
+      // Sample both sides of the target: a transition yields two offsets.
+      const offsets = new Set([
+        zoneOffsetMs(wall - 36 * 3600_000, timeZone),
+        zoneOffsetMs(wall, timeZone),
+        zoneOffsetMs(wall + 36 * 3600_000, timeZone),
+      ]);
+      const candidates = [...offsets].map(offset => {
+        const ts = wall - offset;
+        return { ts, localWall: ts + zoneOffsetMs(ts, timeZone) };
+      });
+      const exact = candidates.filter(c => c.localWall === wall).sort((a, b) => a.ts - b.ts);
+      if (exact.length) return exact[0].ts;
+      const after = candidates.filter(c => c.localWall > wall).sort((a, b) => a.localWall - b.localWall || a.ts - b.ts);
+      if (after.length) return after[0].ts;
+      return Math.max(...candidates.map(c => c.ts));
+    } catch { /* unusable zone — fall through to the device clock */ }
+  }
+  return new Date(y, m - 1, d, 0, minutes).getTime();
+}
+
+// ── requests ────────────────────────────────────────────────────────────────
+// A request is something one relative should take: a call the person asked
+// for, a missed check-in, a missed dose. It is open until someone takes it,
+// claimed while they have it, and done once they record what happened.
+
+export const MAX_NOTE_LENGTH = 500;
+
+const REQUEST_KINDS = {
+  call: { emoji: "📞", label: "call request", headline: (name) => `${name} asked for a call` },
+  missed_checkin: { emoji: "⏰", label: "missed check-in", headline: (name) => `${name} missed a check-in` },
+  missed_dose: { emoji: "💊", label: "missed dose", headline: (name) => `${name} missed a dose` },
+};
+
+export function requestKind(kind) {
+  return REQUEST_KINDS[kind] ?? { emoji: "•", label: "request", headline: (name) => `${name} needs a hand` };
+}
+
+/**
+ * open | claimed | done. A claimed row with nobody on it is OPEN: that is what
+ * is left when the relative who took it leaves the household, and it must go
+ * back on the board rather than look handled forever.
+ */
+export function requestState(row) {
+  if (row?.status === "done") return "done";
+  if (row?.status === "claimed" && row.claimed_by) return "claimed";
+  return "open";
+}
+
+/** Someone other than the person it is about takes an open request. */
+export function canClaim(row, memberId, canHandle) {
+  return !!canHandle && !!memberId && requestState(row) === "open" && row.member_id !== memberId;
+}
+
+/** Only whoever holds a request closes it or hands it back. */
+export function canResolve(row, memberId) {
+  return !!memberId && requestState(row) === "claimed" && row.claimed_by === memberId;
+}
+
+/** The person who asked for a call may withdraw it until someone takes it. */
+export function canCancel(row, memberId) {
+  return !!memberId && row?.kind === "call" && requestState(row) === "open" && row.member_id === memberId;
+}
+
+/** What the person a request is about reads under their own check-in. */
+export function requestStatusLine(row, nameOf) {
+  const state = requestState(row);
+  if (state === "open") return "No one has picked this up yet.";
+  const who = nameOf(row.claimed_by);
+  return state === "claimed" ? `${who} is handling this.` : `${who} followed up.`;
+}
+
+/** Unclaimed first, then oldest first — the longest wait is at the top. */
+export function sortRequests(rows) {
+  const rank = { open: 0, claimed: 1, done: 2 };
+  return [...rows].sort((a, b) =>
+    rank[requestState(a)] - rank[requestState(b)]
+    || String(a.created_at).localeCompare(String(b.created_at)));
+}
+
+export function validateNote(note, { required = false } = {}) {
+  const text = String(note ?? "").trim();
+  if (required && !text) return "Add a short note about what happened.";
+  if (text.length > MAX_NOTE_LENGTH) return `Keep the note under ${MAX_NOTE_LENGTH} characters.`;
+  return null;
+}
+
+/** The source key of the request for one profile's missed check-in on one day. */
+export function missedSourceKey(profileId, date) {
+  return `checkin:${profileId}:${date}`;
+}
+
+/** The calendar day before a "yyyy-mm-dd" day. */
+export function previousDay(day) {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+/** When the care circle is told about the agreed time due on `day`: the occurrence plus the grace, in real minutes. */
+function graceDeadline(due, day, timeZone) {
+  return instantFromLocal(day, due, timeZone) + GRACE_MINUTES * 60_000;
+}
+
+/**
+ * The agreed-time occurrence the care circle has been told about most
+ * recently: `{ date }` once its grace has run out, else null.
+ *
+ * An agreed time late in the evening runs out of grace AFTER midnight — 23:30
+ * is escalated at 00:30 — so the occurrence that matters in the small hours
+ * belongs to yesterday. Looking only at today's would mean the hub tells the
+ * family and the board has nothing for anyone to take. Yesterday's counts only
+ * when its deadline falls today; an ordinary daytime miss does not carry over.
+ */
+export function escalatedOccurrence(profile, today, now, timeZone = null) {
+  const due = parseClockTime(agreedTime(profile));
+  if (due === null) return null;
+  if (now >= graceDeadline(due, today, timeZone)) return { date: today };
+  const yesterday = previousDay(today);
+  const carried = graceDeadline(due, yesterday, timeZone);
+  if (carried >= instantFromLocal(today, 0, timeZone) && now >= carried) return { date: yesterday };
+  return null;
+}
+
+/**
+ * The household day a check-in made now is recorded under. Normally today.
+ * Just after midnight, while yesterday's late agreed time is still inside its
+ * grace, it is yesterday: the hub matches a check-in to an occurrence by that
+ * occurrence's own date, so a check-in at 00:10 filed under the new day would
+ * leave last night's 23:30 unanswered and the family alerted anyway.
+ */
+export function checkinDateFor(profile, today, now, timeZone = null) {
+  const due = parseClockTime(agreedTime(profile));
+  if (due === null) return today;
+  const yesterday = previousDay(today);
+  return now < graceDeadline(due, yesterday, timeZone) ? yesterday : today;
+}
+
+/**
+ * Profiles that have missed a check-in with nobody on it yet, each with the
+ * reason and the household day it belongs to: "agreed" when an agreed time
+ * passed, grace included, with no check-in since; "window" when the silence
+ * window ran out. Derived on every render instead of stored: a quiet day
+ * writes nothing, and the row only exists once a relative takes it.
+ *
+ * One per profile per day (`date` is what the request is keyed on). Someone
+ * still silent tomorrow is raised again tomorrow, which is what a relative
+ * would want to know.
+ *
+ * `dayOf(iso)` names the household day an instant fell on. Check-ins written
+ * before the agreed time existed carry no checkin_date, so the timestamp is
+ * the fallback.
+ */
+export function missedCheckins(profiles, checkins, requests, { today, dayOf, now = Date.now(), timeZone = null }) {
+  const taken = new Set((requests ?? []).map(r => r.source_event_id).filter(Boolean));
+  const out = [];
+  for (const p of profiles ?? []) {
+    if (Number(p.active) !== 1) continue;
+    const occurrence = escalatedOccurrence(p, today, now, timeZone);
+    if (occurrence) {
+      // Someone already has that occurrence: nothing more to raise for it,
+      // and not a second item for the same silence under the window either.
+      if (taken.has(missedSourceKey(p.id, occurrence.date))) continue;
+      // Any check-in on or after the occurrence's day answers it — including
+      // one made late, after the family was told.
+      const answered = (checkins ?? []).some(c =>
+        c.member_id === p.member_id && (c.checkin_date ?? dayOf(c.checked_at)) >= occurrence.date);
+      if (!answered) { out.push({ profile: p, reason: "agreed", date: occurrence.date }); continue; }
+    }
+    if (profileStatus(p, now).state === "overdue" && !taken.has(missedSourceKey(p.id, today))) {
+      out.push({ profile: p, reason: "window", date: today });
+    }
+  }
+  return out;
+}
+
+/**
+ * Who a request's notification goes to: the profile's chosen relatives, or
+ * every adult when none are chosen. A sender who is not an adult may only
+ * address "adults" under the household's default notification policy, so they
+ * always get that audience.
+ */
+export function notifyAudience(profile, senderId, senderIsAdult) {
+  let ids = [];
+  try { ids = JSON.parse(profile?.recipient_member_ids || "[]"); } catch { ids = []; }
+  const others = (Array.isArray(ids) ? ids : []).filter(id => typeof id === "string" && id && id !== senderId);
+  return senderIsAdult && others.length ? others : "adults";
 }
