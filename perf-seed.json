@@ -1,0 +1,467 @@
+{
+ "seed": [
+  {
+   "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, label, active, interval_hours, message, checkin_times, reminder_title, last_checkin_at, created_at, updated_at) VALUES (?, ?, ?, 1, 24, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hours'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-40 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-36 days'))",
+   "params": [
+    "wci-p1",
+    "{{me}}",
+    "Morning check-in",
+    "Please call the landline first, then the neighbor at number 12.",
+    "[\"09:00\"]",
+    "Morning check-in"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 hours'), ?, date('now'), ?)",
+   "params": [
+    "wci-c1",
+    "{{me}}",
+    "good",
+    "Slept well, off to the market.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-25 hours'), ?, date('now','-1 days'), ?)",
+   "params": [
+    "wci-c2",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-49 hours'), ?, date('now','-2 days'), ?)",
+   "params": [
+    "wci-c3",
+    "{{me}}",
+    "ok",
+    "Knee is a bit stiff today.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-97 hours'), ?, date('now','-4 days'), ?)",
+   "params": [
+    "wci-c4",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-121 hours'), ?, date('now','-5 days'), ?)",
+   "params": [
+    "wci-c5",
+    "{{me}}",
+    "good",
+    "Had a good walk with the dog.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-145 hours'), ?, date('now','-6 days'), ?)",
+   "params": [
+    "wci-c6",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-169 hours'), ?, date('now','-7 days'), ?)",
+   "params": [
+    "wci-c7",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-193 hours'), ?, date('now','-8 days'), ?)",
+   "params": [
+    "wci-c8",
+    "{{me}}",
+    "unwell",
+    "Tired, staying in.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-241 hours'), ?, date('now','-10 days'), ?)",
+   "params": [
+    "wci-c9",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-265 hours'), ?, date('now','-11 days'), ?)",
+   "params": [
+    "wci-c10",
+    "{{me}}",
+    "ok",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-289 hours'), ?, date('now','-12 days'), ?)",
+   "params": [
+    "wci-c11",
+    "{{me}}",
+    "good",
+    "Doctor visit went fine.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-313 hours'), ?, date('now','-13 days'), ?)",
+   "params": [
+    "wci-c12",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-337 hours'), ?, date('now','-14 days'), ?)",
+   "params": [
+    "wci-c13",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-361 hours'), ?, date('now','-15 days'), ?)",
+   "params": [
+    "wci-c14",
+    "{{me}}",
+    "unwell",
+    "Feeling a cold coming on.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-385 hours'), ?, date('now','-16 days'), ?)",
+   "params": [
+    "wci-c15",
+    "{{me}}",
+    "ok",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-409 hours'), ?, date('now','-17 days'), ?)",
+   "params": [
+    "wci-c16",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-433 hours'), ?, date('now','-18 days'), ?)",
+   "params": [
+    "wci-c17",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-457 hours'), ?, date('now','-19 days'), ?)",
+   "params": [
+    "wci-c18",
+    "{{me}}",
+    "good",
+    "Garden club this afternoon.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-481 hours'), ?, date('now','-20 days'), ?)",
+   "params": [
+    "wci-c19",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-505 hours'), ?, date('now','-21 days'), ?)",
+   "params": [
+    "wci-c20",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-529 hours'), ?, date('now','-22 days'), ?)",
+   "params": [
+    "wci-c21",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-553 hours'), ?, date('now','-23 days'), ?)",
+   "params": [
+    "wci-c22",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-577 hours'), ?, date('now','-24 days'), ?)",
+   "params": [
+    "wci-c23",
+    "{{me}}",
+    "ok",
+    "Back is sore after the gardening.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-601 hours'), ?, date('now','-25 days'), ?)",
+   "params": [
+    "wci-c24",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-625 hours'), ?, date('now','-26 days'), ?)",
+   "params": [
+    "wci-c25",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-649 hours'), ?, date('now','-27 days'), ?)",
+   "params": [
+    "wci-c26",
+    "{{me}}",
+    "ok",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-673 hours'), ?, date('now','-28 days'), ?)",
+   "params": [
+    "wci-c27",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-697 hours'), ?, date('now','-29 days'), ?)",
+   "params": [
+    "wci-c28",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, note, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-721 hours'), ?, date('now','-30 days'), ?)",
+   "params": [
+    "wci-c29",
+    "{{me}}",
+    "good",
+    "Grandkids visiting this weekend.",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-745 hours'), ?, date('now','-31 days'), ?)",
+   "params": [
+    "wci-c30",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-769 hours'), ?, date('now','-32 days'), ?)",
+   "params": [
+    "wci-c31",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-793 hours'), ?, date('now','-33 days'), ?)",
+   "params": [
+    "wci-c32",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-817 hours'), ?, date('now','-34 days'), ?)",
+   "params": [
+    "wci-c33",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at, profile_id, checkin_date, slot) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-841 hours'), ?, date('now','-35 days'), ?)",
+   "params": [
+    "wci-c34",
+    "{{me}}",
+    "good",
+    "wci-p1",
+    "09:00"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, opened_on, created_at) VALUES (?, ?, ?, ?, ?, date('now'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 hours'))",
+   "params": [
+    "wci-r1",
+    "{{me}}",
+    "call",
+    "open",
+    "Could someone ring me this evening about the pharmacy order?"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, claimed_by, claimed_at, source_event_id, opened_on, created_at) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days'), ? || date('now','-3 days'), date('now','-2 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days'))",
+   "params": [
+    "wci-r2",
+    "{{me}}",
+    "missed_checkin",
+    "claimed",
+    "{{me}}",
+    "checkin:wci-p1:"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, claimed_by, claimed_at, followup_note, closed_at, opened_on, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-119 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-116 hours'), date('now','-5 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-5 days'))",
+   "params": [
+    "wci-r3",
+    "{{me}}",
+    "call",
+    "done",
+    "Can someone help me with the video call setup?",
+    "{{me}}",
+    "Walked through it over the phone, all working now."
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, claimed_by, claimed_at, followup_note, closed_at, source_event_id, opened_on, created_at) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-215 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-212 hours'), ? || date('now','-9 days'), date('now','-9 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-9 days'))",
+   "params": [
+    "wci-r4",
+    "{{me}}",
+    "missed_checkin",
+    "done",
+    "{{me}}",
+    "Phone was on silent. Spoke at lunch, all fine.",
+    "checkin:wci-p1:"
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, claimed_by, claimed_at, followup_note, closed_at, opened_on, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-311 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-308 hours'), date('now','-13 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-13 days'))",
+   "params": [
+    "wci-r5",
+    "{{me}}",
+    "call",
+    "done",
+    "Need a lift to the clinic on Thursday.",
+    "{{me}}",
+    "Booked the ride and confirmed the time."
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, claimed_by, claimed_at, followup_note, closed_at, opened_on, created_at) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-407 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-404 hours'), date('now','-17 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-17 days'))",
+   "params": [
+    "wci-r6",
+    "{{me}}",
+    "missed_dose",
+    "done",
+    "{{me}}",
+    "Took the evening dose late, pill box refilled."
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, claimed_by, claimed_at, followup_note, closed_at, opened_on, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-503 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-500 hours'), date('now','-21 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-21 days'))",
+   "params": [
+    "wci-r7",
+    "{{me}}",
+    "call",
+    "done",
+    "The heating is making a noise.",
+    "{{me}}",
+    "Called the engineer, visit arranged for Monday."
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, claimed_by, claimed_at, followup_note, closed_at, opened_on, created_at) VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-623 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-620 hours'), date('now','-26 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-26 days'))",
+   "params": [
+    "wci-r8",
+    "{{me}}",
+    "call",
+    "done",
+    "Could someone pick up my prescription?",
+    "{{me}}",
+    "Collected and dropped off the same afternoon."
+   ]
+  },
+  {
+   "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, claimed_by, claimed_at, followup_note, closed_at, opened_on, created_at) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-743 hours'), ?, strftime('%Y-%m-%dT%H:%M:%fZ','now','-740 hours'), date('now','-31 days'), strftime('%Y-%m-%dT%H:%M:%fZ','now','-31 days'))",
+   "params": [
+    "wci-r9",
+    "{{me}}",
+    "missed_dose",
+    "done",
+    "{{me}}",
+    "Dose taken after a reminder call."
+   ]
+  }
+ ]
+}
