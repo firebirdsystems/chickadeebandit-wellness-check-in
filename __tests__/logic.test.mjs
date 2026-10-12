@@ -418,17 +418,118 @@ describe("requests", () => {
     expect(L.validateNote("x".repeat(L.MAX_NOTE_LENGTH + 1))).toMatch(/under/);
   });
 
-  it("notifies the chosen relatives, minus the sender, or all adults when none are chosen", () => {
+  it("notifies the chosen relatives, minus the sender, and all adults only when none are chosen", () => {
     const p = { recipient_member_ids: '["maria","dev"]' };
     expect(L.notifyAudience(p, "joe", true)).toEqual(["maria", "dev"]);
     expect(L.notifyAudience(p, "maria", true)).toEqual(["dev"]);
     expect(L.notifyAudience({ recipient_member_ids: "[]" }, "joe", true)).toBe("adults");
-    expect(L.notifyAudience({ recipient_member_ids: '["maria"]' }, "maria", true)).toBe("adults");
+    // Maria is the only relative chosen and the one sending: nobody else is told.
+    expect(L.notifyAudience({ recipient_member_ids: '["maria"]' }, "maria", true)).toEqual([]);
     expect(L.notifyAudience(null, "joe", true)).toBe("adults");
     expect(L.notifyAudience({ recipient_member_ids: "oops" }, "joe", true)).toBe("adults");
   });
 
+  it("knows the audience with the profile in hand, or when the profile would have been read", () => {
+    expect(L.knowsRequestAudience({ recipient_member_ids: "[]" }, false)).toBe(true);
+    expect(L.knowsRequestAudience({ recipient_member_ids: '["maria"]' }, false)).toBe(true);
+    // Whoever supervises, with the profiles read, would have it if there were one.
+    expect(L.knowsRequestAudience(null, true)).toBe(true);
+  });
+
+  it("does not know it without the profile unless the read is certain, so nothing is sent", () => {
+    // A relative who cannot read it, or a supervisor whose read of the profiles failed.
+    expect(L.knowsRequestAudience(null, false)).toBe(false);
+    expect(L.knowsRequestAudience(undefined, undefined)).toBe(false);
+    expect(L.knowsRequestAudience(null, "yes")).toBe(false);
+  });
+
   it("a sender who is not an adult always addresses adults, which the hub's default policy allows", () => {
     expect(L.notifyAudience({ recipient_member_ids: '["maria"]' }, "kid", false)).toBe("adults");
+  });
+});
+
+describe("who looks after the care circle", () => {
+  const adult = { id: "maria", role: "adult" };
+  const child = { id: "kid", role: "child" };
+  const participant = { tenantKind: "shared_space", spaceKind: "general", isAdmin: false };
+  const steward = { tenantKind: "shared_space", spaceKind: "general", isAdmin: true };
+  const rosterMember = { tenantKind: "shared_space", spaceKind: "roster", isAdmin: false };
+  const rosterSteward = { tenantKind: "shared_space", spaceKind: "roster", isAdmin: true };
+  const members = [adult, { id: "joe", role: "adult" }, { id: "dev", role: "adult" }];
+  const mine = { id: "p1", member_id: "maria" };
+  const joes = { id: "p2", member_id: "joe" };
+
+  it("supervises: any adult at home, only the steward in a shared space", () => {
+    expect(L.supervisesCareCircle(adult)).toBe(true);
+    expect(L.supervisesCareCircle(child)).toBe(false);
+    expect(L.supervisesCareCircle(null)).toBe(false);
+    expect(L.supervisesCareCircle(adult, participant)).toBe(false);
+    expect(L.supervisesCareCircle(adult, steward)).toBe(true);
+    expect(L.supervisesCareCircle(adult, rosterMember)).toBe(false);
+    expect(L.supervisesCareCircle(adult, rosterSteward)).toBe(true);
+  });
+
+  it("a supervisor manages every profile", () => {
+    expect(L.canManageProfile(joes, adult)).toBe(true);
+    expect(L.canManageProfile(joes, adult, steward)).toBe(true);
+    expect(L.canManageProfile(joes, adult, rosterSteward)).toBe(true);
+  });
+
+  it("an adult taking part in a space manages only their own profile", () => {
+    expect(L.canManageProfile(mine, adult, participant)).toBe(true);
+    expect(L.canManageProfile(joes, adult, participant)).toBe(false);
+  });
+
+  it("a roster member and a child manage none, not even their own", () => {
+    expect(L.canManageProfile(mine, adult, rosterMember)).toBe(false);
+    expect(L.canManageProfile({ id: "p3", member_id: "kid" }, child)).toBe(false);
+    expect(L.canManageProfile(null, adult)).toBe(false);
+    expect(L.canManageProfile(mine, null)).toBe(false);
+  });
+
+  it("a supervisor may add anyone who has no profile", () => {
+    expect(L.profileSubjects(members, [joes], adult).map(m => m.id)).toEqual(["maria", "dev"]);
+    expect(L.profileSubjects(members, [joes], adult, steward).map(m => m.id)).toEqual(["maria", "dev"]);
+    expect(L.profileSubjects(members, [], adult, rosterSteward).map(m => m.id)).toEqual(["maria", "joe", "dev"]);
+  });
+
+  it("an adult taking part in a space may add only themself, once", () => {
+    expect(L.profileSubjects(members, [], adult, participant).map(m => m.id)).toEqual(["maria"]);
+    expect(L.profileSubjects(members, [mine], adult, participant)).toEqual([]);
+  });
+
+  it("a roster member, a child and nobody may add no one", () => {
+    expect(L.profileSubjects(members, [], adult, rosterMember)).toEqual([]);
+    expect(L.profileSubjects([...members, child], [], child)).toEqual([]);
+    expect(L.profileSubjects(members, [], null)).toEqual([]);
+  });
+});
+
+describe("takesOthersRequests", () => {
+  const adult = { id: "a1", role: "adult" };
+  it("is every adult at home and in a shared space, steward or not", () => {
+    expect(L.takesOthersRequests(adult)).toBe(true);
+    expect(L.takesOthersRequests({ id: "c1", role: "child" })).toBe(false);
+    expect(L.takesOthersRequests(null)).toBe(false);
+    expect(L.takesOthersRequests(adult, { tenantKind: "shared_space", spaceKind: "general", isAdmin: false })).toBe(true);
+    expect(L.takesOthersRequests(adult, { tenantKind: "shared_space", spaceKind: "coparenting", isAdmin: true })).toBe(true);
+  });
+  it("is the steward alone in a roster, where a member writes only their own rows", () => {
+    expect(L.takesOthersRequests(adult, { tenantKind: "shared_space", spaceKind: "roster", isAdmin: false })).toBe(false);
+    expect(L.takesOthersRequests(adult, { tenantKind: "shared_space", spaceKind: "roster", isAdmin: true })).toBe(true);
+  });
+});
+
+describe("opensRequestsForOthers", () => {
+  const adult = { id: "a1", role: "adult" };
+  it("is every adult at home and the steward in a shared space", () => {
+    expect(L.opensRequestsForOthers(adult)).toBe(true);
+    expect(L.opensRequestsForOthers({ id: "c1", role: "child" })).toBe(false);
+    expect(L.opensRequestsForOthers(adult, { tenantKind: "shared_space", spaceKind: "general", isAdmin: false })).toBe(false);
+    expect(L.opensRequestsForOthers(adult, { tenantKind: "shared_space", spaceKind: "general", isAdmin: true })).toBe(true);
+  });
+  it("is nobody in a co-parenting space, steward or not", () => {
+    expect(L.opensRequestsForOthers(adult, { tenantKind: "shared_space", spaceKind: "coparenting", isAdmin: true })).toBe(false);
+    expect(L.opensRequestsForOthers(adult, { tenantKind: "shared_space", spaceKind: "coparenting", isAdmin: false })).toBe(false);
   });
 });

@@ -117,6 +117,8 @@
     .actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
     .actions .spacer { flex: 1; }
     .hint { font-size: .8rem; color: var(--muted); margin-top: 4px; }
+    .load-error { margin: 0 0 12px; padding: 10px 14px; border-radius: 10px; background: var(--hub-tint-danger, #fee2e2); color: var(--hub-tint-danger-fg, #b91c1c); font-size: 0.9rem; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+    .load-error-retry { background: none; border: 1px solid currentColor; border-radius: 8px; padding: 5px 10px; font: inherit; font-weight: 600; color: inherit; cursor: pointer; flex-shrink: 0; }
     .error { background: var(--red-soft); color: var(--red); padding: 9px 12px; border-radius: 8px; margin: 8px 0; font-size: .86rem; }
     .notice { background: var(--green-soft); color: var(--green); padding: 9px 12px; border-radius: 8px; margin: 8px 0; font-size: .86rem; }
     .empty { text-align: center; color: var(--muted); padding: 26px 14px; }
@@ -158,7 +160,8 @@
       normalizeEmail, isValidEmail, MAX_PROFILES, MAX_EXTERNAL_RECIPIENTS, searchableFields,
       GRACE_MINUTES, MAX_NOTE_LENGTH, agreedTime, checkinTimesValue, timedAlertValue, reminderTitle,
       formatClock, requestKind, requestState, canClaim, canResolve, canCancel,
-      requestStatusLine, sortRequests, validateNote, missedSourceKey, missedCheckins, notifyAudience, checkinDateFor,
+      requestStatusLine, sortRequests, validateNote, missedSourceKey, missedCheckins, notifyAudience, knowsRequestAudience, checkinDateFor,
+      supervisesCareCircle, canManageProfile, profileSubjects, opensRequestsForOthers, takesOthersRequests,
     } from "./logic.js";
 
     document.getElementById("page-glyph").innerHTML = glyph("pulse-heart");
@@ -176,25 +179,42 @@
     let memberMap = new Map();
     let profiles = [];
 let searchQ = "";       // in-app search (see logic.js searchableFields)
-    let checkins = [];               // rows visible to me (owner + adults see all)
-    let requests = [];               // hand-offs visible to me (same rule as check-ins)
+    let checkins = [];               // rows visible to me: my own, and everyone's for whoever supervises
+    let requests = [];               // hand-offs visible to me: my own, and every one for an adult
     let entitled = null;             // null until the endpoint answers
     let externalContacts = new Map();// normalized email → { status, name }
+    let externalContactsUnread = false; // the list could not be read: a status is unknown, not "pending"
     let contactsBook = [];           // [{name, email}] quick-adds from contacts app
     let error = "";
     let notice = "";
+    let loadFailed = false;          // the board could not be read: it is unknown, not empty
     let noteDraft = "";
 
     const iAmAdult = () => isAdult(ME, members);
     const EVENTS_URL = window.__EVENTS_URL ?? "/api/events";
     const IS_ADMIN  = window.__IS_ADMIN === true;
     const IS_ROSTER = window.__SPACE_KIND === "roster";
-    // Who sets up and manages the monitored profiles. In a roster (a care
-    // coordinator's client list) that's the steward alone; each member only
-    // checks in for themselves. Elsewhere any adult in the care circle manages.
-    // Matches the hub profiles policy (adult_writable + member_read_column +
+    const TENANT = {
+      tenantKind: window.__TENANT_KIND ?? "household",
+      spaceKind: window.__SPACE_KIND ?? null,
+      isAdmin: IS_ADMIN,
+    };
+    // Who may write a profile at all. In a roster (a care coordinator's client
+    // list) that's the steward alone; elsewhere any adult, though one who only
+    // takes part in a shared space reaches just their own. Matches the hub
+    // profiles policy (adult_writable + member_read_column +
     // steward_writes_only). Checking in is never gated — that's every member's.
     const canSteward = () => IS_ROSTER ? IS_ADMIN : iAmAdult();
+    // Who sees the whole board and adds a profile for someone else: any adult
+    // at home, only the steward in a shared space.
+    const supervises = () => supervisesCareCircle(ME, TENANT);
+    // Requests are the care circle's to share: any adult reads them and may
+    // take one, except in a roster, where only the steward does. Picking up a
+    // missed check-in opens a request about someone else, which only whoever
+    // supervises may do.
+    const takesRequests = () => takesOthersRequests(ME, TENANT);
+    const takesMissed = () => opensRequestsForOthers(ME, TENANT);
+    const canManage = p => canManageProfile(p, ME, TENANT);
 
     async function db(sql, params = []) {
       if (!DB) return { rows: [] };
@@ -202,8 +222,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sql, params }),
       });
-      const json = await res.json();
-      if (json.error) throw new Error(json.error);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
       return json;
     }
 
@@ -231,10 +251,13 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           { id: "demo-3", name: "Dev", role: "adult" },
         ];
       } else {
-        try {
-          const res = await fetch(`${CONTEXT}?keys=family.members`);
-          members = ((await res.json())["family.members"]) ?? [];
-        } catch { members = []; }
+        // A failed read throws: it is a failed load, never a household of nobody.
+        const res = await fetch(`${CONTEXT}?keys=family.members`);
+        const data = await res.json().catch(() => null);
+        if (!res.ok || data === null || typeof data !== "object" || Array.isArray(data)) throw new Error("Couldn’t reach the hub. Try again.");
+        // A 200 that names the key in `$errors` is the hub saying it could not read it.
+        if (Array.isArray(data.$errors) && data.$errors.includes("family.members")) throw new Error("Couldn’t reach the hub. Try again.");
+        members = data["family.members"] ?? [];
       }
       memberMap = new Map(members.map(m => [m.id, m]));
     }
@@ -303,13 +326,16 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
 
     async function loadExternalContacts() {
       externalContacts = new Map();
+      externalContactsUnread = false;
       if (!XC_LIST) return;
+      // Optional, so a failure never raises the banner — but it is remembered,
+      // so a confirmed contact is not then drawn as "Pending".
       try {
         const res = await fetch(XC_LIST, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-        if (!res.ok) return;
+        if (!res.ok) { externalContactsUnread = true; return; }
         const { contacts } = await res.json();
         for (const c of contacts ?? []) externalContacts.set(normalizeEmail(c.email), { status: c.status, name: c.name || "" });
-      } catch { /* leave empty */ }
+      } catch { externalContactsUnread = true; }
     }
 
     async function loadContactsBook() {
@@ -329,7 +355,11 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     function memberName(id) { return memberMap.get(id)?.name ?? "Someone"; }
     function myProfile() { return profiles.find(p => p.member_id === ME?.id) ?? null; }
     function checkinsFor(memberId) { return checkins.filter(c => c.member_id === memberId); }
-    function contactStatus(email) { return externalContacts.get(normalizeEmail(email))?.status ?? "pending"; }
+    // "" when the status is not known (the list could not be read): no badge.
+    function contactStatus(email) {
+      const known = externalContacts.get(normalizeEmail(email))?.status;
+      return known ?? (externalContactsUnread ? "" : "pending");
+    }
     function contactName(email) {
       const norm = normalizeEmail(email);
       return externalContacts.get(norm)?.name || contactsBook.find(c => c.email === norm)?.name || "";
@@ -424,13 +454,15 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     // The relatives' side: everything that still needs someone, unclaimed first.
     function renderNeedsAHand() {
       const open = sortRequests(requests.filter(r => r.member_id !== ME.id && requestState(r) !== "done"));
-      const missed = canSteward() ? missedNow().filter(m => m.profile.member_id !== ME.id) : [];
+      // Whoever supervises reads the profiles a missed check-in is worked out
+      // from, so they see it even where they cannot take it (co-parenting).
+      const missed = supervises() ? missedNow().filter(m => m.profile.member_id !== ME.id) : [];
       const handled = requests.filter(r => r.member_id !== ME.id && requestState(r) === "done").slice(0, 5);
       if (!open.length && !missed.length && !handled.length) return "";
       return `
         ${open.length || missed.length ? `
           <div class="board-head" style="margin: 6px 2px 10px"><h2 style="font-size:1rem">Needs a hand</h2></div>
-          <div class="card hand-card">
+          <div class="card hand-card" data-testid="needs-a-hand">
             ${missed.map(renderMissedItem).join("")}
             ${open.map(renderRequestItem).join("")}
           </div>` : ""}
@@ -452,7 +484,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
             <span class="pill warn">Unclaimed</span>
           </div>
           <div class="board-meta">${esc(why)}</div>
-          <div class="row-actions" style="margin-top:6px"><button class="btn btn-sm" data-req-claim-missed="${esc(p.id)}">I’ve got this</button></div>
+          ${takesMissed() ? `<div class="row-actions" style="margin-top:6px"><button class="btn btn-sm" data-testid="claim-missed" data-profile-id="${esc(p.id)}" data-req-claim-missed="${esc(p.id)}">I’ve got this</button></div>` : ""}
         </div>`;
     }
 
@@ -463,7 +495,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         : state === "claimed" ? ["good", r.claimed_by === ME.id ? "You’re handling this" : `${memberName(r.claimed_by)} is handling this`]
         : ["", r.claimed_by === ME.id ? "You followed up" : `${memberName(r.claimed_by)} followed up`];
       return `
-        <div class="req">
+        <div class="req" data-testid="request" data-request-id="${esc(r.id)}" data-request-state="${esc(state)}">
           <div class="req-head">
             <span class="req-title">${glyph(kind.glyph)} ${esc(kind.headline(memberName(r.member_id)))}</span>
             <span class="pill ${pill[0]}">${esc(pill[1])}</span>
@@ -471,9 +503,9 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           <div class="board-meta">${esc(fmtAgo(state === "done" ? r.closed_at : r.created_at))}</div>
           ${r.note ? `<div class="req-note">“${esc(r.note)}”</div>` : ""}
           ${r.followup_note ? `<div class="req-note">${esc(r.followup_note)}</div>` : ""}
-          ${canClaim(r, ME.id, canSteward()) || canResolve(r, ME.id) ? `
+          ${canClaim(r, ME.id, takesRequests()) || canResolve(r, ME.id) ? `
             <div class="row-actions" style="margin-top:6px">
-              ${canClaim(r, ME.id, canSteward()) ? `<button class="btn btn-sm" data-req-claim="${esc(r.id)}">I’ve got this</button>` : ""}
+              ${canClaim(r, ME.id, takesRequests()) ? `<button class="btn btn-sm" data-testid="claim-request" data-request-id="${esc(r.id)}" data-req-claim="${esc(r.id)}">I’ve got this</button>` : ""}
               ${canResolve(r, ME.id) ? `
                 <button class="btn btn-sm" data-req-close="${esc(r.id)}">Record follow-up</button>
                 <button class="btn-ghost btn-sm" data-req-release="${esc(r.id)}">Hand back</button>` : ""}
@@ -507,10 +539,9 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const recent = searchQ
         ? all.filter(c => searchMatch(searchQ, [c.note ?? "", c.mood ?? ""]))
         : all.slice(0, 3);
-      const canManage = canSteward();
       const isSelf = p.member_id === ME?.id;
       return `
-        <div class="card board-card" data-pid="${esc(p.id)}">
+        <div class="card board-card" data-testid="board-card" data-profile-id="${esc(p.id)}" data-pid="${esc(p.id)}">
           <div class="board-head">
             <div>
               <div class="board-title">${esc(profileTitle(p, members))}</div>
@@ -520,7 +551,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           </div>
           ${streak > 0 ? `<div class="streak">${glyph("flame")} ${streak}-day streak</div>` : ""}
           ${recent.length ? `<div class="history">${recent.map(renderHistoryItem).join("")}</div>` : `<p class="board-meta" style="margin-top:8px">No check-ins logged yet.</p>`}
-          ${canManage ? `
+          ${canManage(p) ? `
             <div class="row-actions">
               <button class="btn-ghost btn-sm" data-edit="${esc(p.id)}">Settings</button>
               ${Number(p.active) === 1
@@ -553,12 +584,18 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     function render() {
       const root = document.getElementById("root");
       if (!ME) { root.innerHTML = `<div class="card empty">Sign in to use Wellness Check-In.</div>`; return; }
+      if (loadFailed) {
+        root.innerHTML = `<div class="load-error" data-testid="load-error" role="alert"><span>Couldn’t load the check-ins.</span> <button type="button" class="load-error-retry" data-testid="load-retry">Try again</button></div>`;
+        return;
+      }
       // A search keeps a card when the person matches OR anything they have
       // written does, so typing a symptom surfaces who reported it.
       const others = searchQ
         ? profiles.filter(p => searchMatch(searchQ, searchableFields(
             p, memberName(p.member_id), checkinsFor(p.member_id).map(c => c.note ?? "").join(" "))))
         : profiles;
+      // Someone who doesn't supervise may still set up their own check-in.
+      const addSelf = !supervises() && membersWithoutProfile().length > 0;
       root.innerHTML = `
         ${renderBanner()}
         ${renderMessages()}
@@ -566,14 +603,17 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         ${renderNeedsAHand()}
         <div class="board-head" style="margin: 6px 2px 10px">
           <h2 style="font-size:1rem">Care circle</h2>
-          ${canSteward() ? `<button class="btn btn-sm" data-add ${profiles.length >= MAX_PROFILES ? "disabled" : ""}>+ Add someone</button>` : ""}
+          ${supervises()
+            ? `<button class="btn btn-sm" data-testid="add-profile" data-scope="anyone" data-add ${profiles.length >= MAX_PROFILES ? "disabled" : ""}>+ Add someone</button>`
+            : addSelf ? `<button class="btn btn-sm" data-testid="add-profile" data-scope="self" data-add>+ Add yourself</button>` : ""}
         </div>
+        ${TENANT.tenantKind === "shared_space" && !supervises() ? `<p class="hint" data-testid="scope-note">${IS_ROSTER ? "Here, the steward sees everyone’s check-ins and takes requests." : "In a shared space, the steward sees everyone’s check-ins. Any adult can take a request."}</p>` : ""}
         ${profiles.length ? `<div class="search-row"><input id="search" class="search-input" type="search" placeholder="Search the care circle…" aria-label="Search the care circle" value="${esc(searchQ)}" /></div>` : ""}
         ${others.length
           ? others.map(renderBoardCard).join("")
           : searchQ
             ? `<div class="card empty">Nobody matches "${esc(searchQ)}".</div>`
-            : `<div class="card empty">No check-in profiles yet.${canSteward() ? " Add someone to start." : ""}</div>`}
+            : `<div class="card empty">No check-in profiles yet.${supervises() ? " Add someone to start." : addSelf ? " Add yourself to start." : ""}</div>`}
         <p class="footnote">Alerts are emailed to household members and to external contacts who confirmed by email (double opt-in).
           Monitoring runs on the hub’s servers — it works even when nobody has the app open.</p>`;
     }
@@ -641,14 +681,34 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       publishEvent(type, r.member_id, { member_id: r.member_id, request_id: r.id, kind: r.kind });
     }
 
-    function tell(r, title, body, key) {
+    // Not sent when the sender cannot tell who it is for (see
+    // knowsRequestAudience): a relative taking part in a shared space cannot
+    // read the profile, and the board is what shows everyone their change.
+    //
+    // The profiles are read again first: who is chosen may have changed since
+    // this page last looked, and a notice must not go to a relative who was
+    // taken off the list. If that read fails, nothing is sent.
+    async function tell(r, title, body, key) {
       if (!DB) return;
+      try { await loadProfiles(); } catch { return; }
+      const profile = profileFor(r.member_id);
+      if (!knowsRequestAudience(profile, supervises())) return;
+      const audience = notifyAudience(profile, ME.id, iAmAdult());
+      // The sender was the only relative chosen: nobody else is to be told.
+      if (Array.isArray(audience) && !audience.length) return;
       sendHubNotification({
         title, body,
-        audience: notifyAudience(profileFor(r.member_id), ME.id, iAmAdult()),
+        audience,
         url: `/run/${APP_ID}`,
         idempotencyKey: `${APP_ID}:${key}:${r.id}`,
       });
+    }
+
+    // Keyed on the claim, not only the request: the hub replays a repeated key
+    // without sending, and the same relative can take a request, hand it back
+    // and take it again.
+    function tellClaimed(r) {
+      tell(r, `${ME.name ?? "Someone"} is handling it`, `${requestKind(r.kind).headline(memberName(r.member_id))}.`, `claimed:${Date.parse(r.claimed_at) || 0}`);
     }
 
     function openCallForm() {
@@ -687,24 +747,38 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       sendingCall = false;
       requests = [r, ...requests];
       closeModal();
-      flash({ ok: "Your care circle has been asked to call." });
+      render();   // the request shows at once; the line about who was told follows the send
+      // Who is chosen may have changed since this page last looked; if the
+      // profile cannot be read now, the request is on the board but nobody is
+      // pushed, and the person is told that rather than that they were.
+      let known = true;
+      if (DB) { try { await loadProfiles(); } catch { known = false; } }
       announce("wellness.call_requested", r);
       // The reason is the person's own words: previews off (the default) show
       // the generic line on a locked screen, the inbox shows the rest.
-      if (DB) sendHubNotification({
+      const audience = notifyAudience(myProfile(), ME.id, iAmAdult());
+      const anyone = !(Array.isArray(audience) && !audience.length);
+      const sent = !DB || (known && anyone && !!(await sendHubNotification({
         title: `${ME.name ?? "Someone"} would like a call`,
         body: note || "Open Wellness Check-In to say you’ve got it.",
         generic: note ? { body: "Open Wellness Check-In to say you’ve got it." } : undefined,
-        audience: notifyAudience(myProfile(), ME.id, iAmAdult()),
+        audience,
         url: `/run/${APP_ID}`,
         idempotencyKey: `${APP_ID}:call:${r.id}`,
-      });
+      })));
+      flash({ ok: sent ? "Your care circle has been asked to call."
+        : anyone ? "Your request is on the board. We couldn’t notify your care circle just now."
+        : "Your request is on the board for your care circle to see." });
     }
 
     async function cancelRequest(id) {
       try {
-        await db(`DELETE FROM ${T}requests WHERE id = ? AND status = 'open'`, [id]);
-        await loadRequests();
+        const res = await db(`DELETE FROM ${T}requests WHERE id = ? AND status = 'open'`, [id]);
+        // Zero rows means it stopped being open first: someone claimed it.
+        const gone = !DB || res.changed > 0;
+        // The write has landed; a failed re-read must not report it as failed.
+        await loadRequests().catch(() => { if (gone) requests = requests.filter(x => !(x.id === id && requestState(x) === "open")); });
+        if (!gone && requests.some(x => x.id === id)) return flash({ err: "Someone has already picked this up, so it can’t be withdrawn." });
         flash({ ok: "Call request withdrawn." });
       } catch (e) { flash({ err: e.message }); }
     }
@@ -718,16 +792,21 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           `UPDATE ${T}requests SET status = 'claimed', claimed_by = ?, claimed_at = ?
            WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL))`,
           [ME.id, now, id]);
-        await loadRequests();
+        // The claim has landed or not by now; a failed re-read must not hide
+        // which, or swallow the announcement of one that did.
+        await loadRequests().catch(() => {});
         const r = requests.find(x => x.id === id);
         if (DB && !res.changed) {
           return flash({ err: r && requestState(r) !== "open"
             ? `${memberName(r.claimed_by)} already has this one.` : "That request is no longer open." });
         }
+        // If the re-read failed the row here is the old one: mark it taken, so
+        // the board stops offering it and the notice is keyed on this claim.
+        if (r && r.claimed_by !== ME.id) Object.assign(r, { status: "claimed", claimed_by: ME.id, claimed_at: now });
         flash({ ok: "It’s yours. Record what happened when you’ve followed up." });
         if (r) {
           announce("wellness.request_claimed", r);
-          tell(r, `${ME.name ?? "Someone"} is handling it`, `${requestKind(r.kind).headline(memberName(r.member_id))}.`, "claimed");
+          tellClaimed(r);
         }
       } catch (e) { flash({ err: e.message }); }
     }
@@ -744,19 +823,27 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const now = new Date().toISOString();
       const r = {
         id: crypto.randomUUID(), member_id: p.member_id, kind: "missed_checkin", status: "claimed",
-        claimed_by: ME.id, source_event_id: missedSourceKey(p.id, missed.date),
+        claimed_by: ME.id, claimed_at: now, source_event_id: missedSourceKey(p.id, missed.date),
       };
       try {
         await db(`INSERT INTO ${T}requests (id, member_id, kind, status, claimed_by, claimed_at, source_event_id, opened_on, created_at) VALUES (?, ?, 'missed_checkin', 'claimed', ?, ?, ?, ?, ?)`,
           [r.id, r.member_id, r.claimed_by, now, r.source_event_id, hubToday(), now]);
-      } catch {
-        await loadRequests();
-        return flash({ err: "Someone else just took this one." });
+      } catch (e) {
+        await loadRequests().catch(() => {});
+        // The unique source key is what refuses a second relative; anything
+        // else is a real failure and is reported as itself.
+        const landed = requests.find(x => x.source_event_id === r.source_event_id);
+        // The insert can land and its answer be lost: then the row is this
+        // member's own, and it is theirs, not someone else's.
+        if (!(landed && landed.id === r.id)) {
+          const taken = !!landed || /UNIQUE/i.test(e?.message ?? "");
+          return flash({ err: taken ? "Someone else just took this one." : (e?.message || "Couldn’t reach the hub. Try again.") });
+        }
       }
-      await loadRequests();
+      await loadRequests().catch(() => {});
       flash({ ok: "It’s yours. Record what happened when you’ve followed up." });
       announce("wellness.request_claimed", r);
-      tell(r, `${ME.name ?? "Someone"} is handling it`, `${requestKind(r.kind).headline(memberName(r.member_id))}.`, "claimed");
+      tellClaimed(r);
     }
 
     async function releaseRequest(id) {
@@ -764,10 +851,13 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         const res = await db(
           `UPDATE ${T}requests SET status = 'open', claimed_by = NULL, claimed_at = NULL
            WHERE id = ? AND status = 'claimed' AND claimed_by = ?`, [id, ME.id]);
-        await loadRequests();
+        // The hand-back has landed or not by now; a failed re-read must not
+        // hide which, or swallow the announcement of one that did.
+        await loadRequests().catch(() => {});
         if (DB && !res.changed) return flash({ err: "That request isn’t yours to hand back any more." });
-        flash({ ok: "Handed back — it’s open for someone else." });
         const r = requests.find(x => x.id === id);
+        if (r && r.claimed_by === ME.id) Object.assign(r, { status: "open", claimed_by: null, claimed_at: null });
+        flash({ ok: "Handed back — it’s open for someone else." });
         if (r) {
           announce("wellness.request_released", r);
           // Keyed on the moment: the same request can be handed back twice.
@@ -796,16 +886,18 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const note = modalEl.querySelector("#rq-follow").value.trim();
       const err = validateNote(note, { required: true });
       if (err) return modalError(err);
+      const closedAt = new Date().toISOString();
       try {
         const res = await db(
           `UPDATE ${T}requests SET status = 'done', followup_note = ?, closed_at = ?
            WHERE id = ? AND status = 'claimed' AND claimed_by = ?`,
-          [note, new Date().toISOString(), id, ME.id]);
-        await loadRequests();
+          [note, closedAt, id, ME.id]);
+        await loadRequests().catch(() => {});
         closeModal();
         if (DB && !res.changed) return flash({ err: "That request isn’t yours to close any more." });
-        flash({ ok: "Follow-up recorded." });
         const r = requests.find(x => x.id === id);
+        if (r && r.status !== "done") Object.assign(r, { status: "done", followup_note: note, closed_at: closedAt });
+        flash({ ok: "Follow-up recorded." });
         if (r) announce("wellness.request_closed", r);
       } catch (e) { modalError(e.message); }
     }
@@ -813,7 +905,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     // ── arm / disarm / delete ─────────────────────────────────────────────────
 
     async function armProfile(id) {
-      if (!canSteward()) return;
+      if (!canManage(profiles.find(x => x.id === id))) return;
       if (entitled === false) return flash({ err: "Monitoring is paused while the household's plan is inactive — ask an admin to renew." });
       try {
         await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
@@ -823,7 +915,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     }
 
     async function disarmProfile(id) {
-      if (!canSteward()) return;
+      if (!canManage(profiles.find(x => x.id === id))) return;
       try {
         await db(`UPDATE ${T}profiles SET active = 0, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
         await loadProfiles();
@@ -832,8 +924,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     }
 
     async function deleteProfile(id) {
-      if (!canSteward()) return;
       const p = profiles.find(x => x.id === id);
+      if (!canManage(p)) return;
       if (!(await hubConfirm({ message: `Delete ${profileTitle(p, members)}?`, description: "Monitoring stops immediately. Check-in history is kept.", confirmLabel: "Delete", destructive: true }))) return;
       try {
         await db(`DELETE FROM ${T}profiles WHERE id = ?`, [id]);
@@ -858,9 +950,10 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     // Track the external emails chosen inside the open modal.
     let modalEmails = [];
 
+    // Whom a new profile may be for: anyone without one for whoever
+    // supervises, only themself for any other adult.
     function membersWithoutProfile() {
-      const taken = new Set(profiles.map(p => p.member_id));
-      return members.filter(m => !taken.has(m.id));
+      return profileSubjects(members, profiles, ME, TENANT);
     }
 
     function configFormHtml(p) {
@@ -893,9 +986,9 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         <div data-el="recipients">
           ${recipientOptions.length
             ? recipientOptions.map(m => `<label class="recipient"><input type="checkbox" value="${esc(m.id)}" ${chosen.has(m.id) ? "checked" : ""} /> ${esc(m.name)}</label>`).join("")
-            : `<p class="hint">No other adults in the household yet.</p>`}
+            : `<p class="hint">No other adults here yet.</p>`}
         </div>
-        <p class="hint">Leave everyone unchecked to alert all adults in the household.</p>
+        <p class="hint">Leave everyone unchecked to alert all adults.</p>
         <label>External email contacts</label>
         <div class="ext-chips" data-el="external-list"></div>
         <div class="add-external">
@@ -913,7 +1006,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     }
 
     function openConfig(p) {
-      if (!canSteward()) return;
+      if (p ? !canManage(p) : !supervises() && membersWithoutProfile().length === 0) return;
       if (p == null && membersWithoutProfile().length === 0) {
         return flash({ err: "Everyone already has a check-in profile." });
       }
@@ -934,7 +1027,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         const who = name ? `${esc(name)} · ${esc(email)}` : esc(email);
         return `<span class="ext-chip" data-email="${esc(email)}">
           <span class="who">${who}</span>
-          <span class="badge ${esc(status)}">${esc(BADGE[status] ?? "Pending")}</span>
+          ${status ? `<span class="badge ${esc(status)}">${esc(BADGE[status] ?? "Pending")}</span>` : ""}
           <button type="button" class="x" data-action="remove-external" title="Remove">×</button>
         </span>`;
       }).join("");
@@ -1031,7 +1124,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         try {
           await db(`UPDATE ${T}profiles SET timed_alert_member_ids = ? WHERE id = ?`, [want, p.id]);
           p.timed_alert_member_ids = want;
-        } catch { /* not ours to fix (a participant in a shared space) */ }
+        } catch { /* left as it is; the next visit tries again */ }
       }
     }
 
@@ -1044,6 +1137,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     document.getElementById("root").addEventListener("click", e => {
       const btn = e.target.closest("button");
       if (!btn) return;
+      if (btn.matches('[data-testid="load-retry"]')) return void firstLoad();
       if (btn.hasAttribute("data-checkin-mood")) return void doCheckIn(btn.getAttribute("data-checkin-mood"));
       if (btn.hasAttribute("data-add")) return void openConfig(null);
       if (btn.hasAttribute("data-edit")) return void openConfig(profiles.find(p => p.id === btn.getAttribute("data-edit")));
@@ -1083,11 +1177,22 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
 
     // ── init ──────────────────────────────────────────────────────────────────
 
-    (async function init() {
-      await Promise.all([loadMembers(), loadProfiles(), loadCheckins(), loadRequests(), loadEntitlement(), loadExternalContacts(), loadContactsBook()]);
+    // A board that cannot be read says so, with a way to try again: the page
+    // never sits on "Loading…", and the minute tick below retries too.
+    async function firstLoad() {
+      let failed = false;
+      await Promise.all([
+        loadMembers().catch(() => { failed = true; }), refreshBoard().catch(() => { failed = true; }),
+        loadEntitlement(), loadExternalContacts(), loadContactsBook(),
+      ]);
+      loadFailed = failed;
       if (!ME && !CONTEXT) ME = members[0] ?? null; // demo mode: act as the first member
       render();
-      healTimedAudience();
+      if (!loadFailed) healTimedAudience();
+    }
+
+    (async function init() {
+      await firstLoad();
       // Every minute: re-read the board, then redraw (which also keeps the
       // countdowns fresh). Unconditionally — an empty board is exactly the one
       // that has to notice a call request arriving, and a relative with the app
@@ -1097,7 +1202,12 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const tick = async () => {
         if (modalEl || refreshing) return;
         refreshing = true;
-        try { await refreshBoard(); } catch { /* offline: redraw what we have */ }
+        // A failed first load is retried whole: the board alone answering does
+        // not make the member list known.
+        if (loadFailed) { await firstLoad(); refreshing = false; return; }
+        try {
+          await refreshBoard();
+        } catch { /* offline: redraw what we have */ }
         refreshing = false;
         if (!modalEl) render();
       };

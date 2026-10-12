@@ -757,131 +757,20 @@
       ]
     },
     {
-      "name": "in a shared space a participant reads and raises only their own requests and cannot take another's, while the steward handles everyone's",
+      "name": "in a shared space any adult reads the open requests and takes one, a request is raised only as yourself, and the steward can open one about someone else",
       "context": "shared_space",
-      "members": {
-        "a": "adult",
-        "b": "adult",
-        "steward": "admin"
-      },
+      "members": {"a": "adult", "b": "adult", "steward": "admin"},
       "steps": [
-        {
-          "action": "seedRaw",
-          "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, created_at) VALUES ('ra', ?, 'call', 'open', ?), ('rb', ?, 'call', 'open', ?)",
-          "params": [
-            "{{a}}",
-            "2026-03-10T10:00:00Z",
-            "{{b}}",
-            "2026-03-10T10:00:00Z"
-          ]
-        },
-        {
-          "action": "db",
-          "as": "a",
-          "sql": "SELECT id FROM app_wellness_check_in__requests",
-          "expect": {
-            "status": 200,
-            "rowCount": 1,
-            "rowsContain": [
-              {
-                "id": "ra"
-              }
-            ]
-          }
-        },
-        {
-          "action": "db",
-          "as": "a",
-          "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL))",
-          "params": [
-            "{{a}}",
-            "2026-03-10T10:00:00Z",
-            "rb"
-          ],
-          "expect": {
-            "status": 200
-          }
-        },
-        {
-          "action": "db",
-          "as": "a",
-          "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, created_at) VALUES (?, ?, 'call', 'open', ?)",
-          "params": [
-            "rx",
-            "{{b}}",
-            "2026-03-10T10:00:00Z"
-          ],
-          "expect": {
-            "status": 200
-          }
-        },
-        {
-          "action": "db",
-          "as": "b",
-          "sql": "SELECT id FROM app_wellness_check_in__requests ORDER BY id",
-          "expect": {
-            "status": 200,
-            "rowCount": 1,
-            "rowsContain": [
-              {
-                "id": "rb"
-              }
-            ]
-          }
-        },
-        {
-          "action": "db",
-          "as": "steward",
-          "sql": "SELECT id, status FROM app_wellness_check_in__requests ORDER BY id",
-          "expect": {
-            "status": 200,
-            "rowCount": 3,
-            "rowsContain": [
-              {
-                "id": "ra",
-                "status": "open"
-              },
-              {
-                "id": "rb",
-                "status": "open"
-              },
-              {
-                "id": "rx",
-                "status": "open"
-              }
-            ]
-          }
-        },
-        {
-          "action": "db",
-          "as": "steward",
-          "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL))",
-          "params": [
-            "{{steward}}",
-            "2026-03-10T10:00:00Z",
-            "rb"
-          ],
-          "expect": {
-            "status": 200
-          }
-        },
-        {
-          "action": "db",
-          "as": "b",
-          "sql": "SELECT id FROM app_wellness_check_in__requests WHERE status = 'claimed' AND claimed_by = ?",
-          "params": [
-            "{{steward}}"
-          ],
-          "expect": {
-            "status": 200,
-            "rowCount": 1,
-            "rowsContain": [
-              {
-                "id": "rb"
-              }
-            ]
-          }
-        }
+        {"action": "seedRaw", "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, created_at) VALUES ('ra', ?, 'call', 'open', ?), ('rb', ?, 'call', 'open', ?)", "params": ["{{a}}", "2026-03-10T10:00:00Z", "{{b}}", "2026-03-10T10:00:00Z"]},
+        {"action": "db", "as": "a", "sql": "SELECT id FROM app_wellness_check_in__requests ORDER BY id", "expect": {"status": 200, "rowCount": 2}},
+        {"action": "db", "as": "a", "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL)) RETURNING id", "params": ["{{a}}", "2026-03-10T10:00:00Z", "rb"], "expect": {"status": 200, "rowCount": 1}},
+        {"action": "db", "as": "steward", "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL)) RETURNING id", "params": ["{{steward}}", "2026-03-10T10:05:00Z", "rb"], "expect": {"status": 200, "rowCount": 0}},
+        {"action": "db", "as": "b", "sql": "SELECT id FROM app_wellness_check_in__requests WHERE status = 'claimed' AND claimed_by = ?", "params": ["{{a}}"], "expect": {"status": 200, "rowCount": 1, "rowsContain": [{"id": "rb"}]}},
+        {"action": "db", "as": "a", "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, created_at) VALUES (?, ?, 'call', 'open', ?)", "params": ["rx", "{{b}}", "2026-03-10T10:00:00Z"], "expect": {"status": 200}},
+        {"action": "db", "as": "steward", "sql": "SELECT id FROM app_wellness_check_in__requests WHERE member_id = ? ORDER BY id", "params": ["{{a}}"], "expect": {"status": 200, "rowCount": 2, "rowsContain": [{"id": "ra"}, {"id": "rx"}]}},
+        {"action": "db", "as": "steward", "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, claimed_by, claimed_at, source_event_id, created_at) VALUES (?, ?, 'missed_checkin', 'claimed', ?, ?, ?, ?)", "params": ["rm", "{{b}}", "{{steward}}", "2026-03-10T11:00:00Z", "checkin:p1:2026-03-10", "2026-03-10T11:00:00Z"], "expect": {"status": 200}},
+        {"action": "db", "as": "b", "sql": "SELECT id, member_id FROM app_wellness_check_in__requests WHERE kind = 'missed_checkin'", "expect": {"status": 200, "rowCount": 1, "rowsContain": [{"id": "rm", "member_id": "scn-b"}]}},
+        {"action": "db", "as": "a", "sql": "UPDATE app_wellness_check_in__requests SET visibility = 'everyone' WHERE id = ?", "params": ["ra"], "expect": {"status": 403}}
       ]
     },
     {
@@ -979,6 +868,41 @@
             ]
           }
         }
+      ]
+    },
+    {
+      "name": "in a co-parenting space a steward reads the other parent's check-ins but cannot open a request in their name: it is recorded as the steward's own",
+      "context": "shared_space.coparenting",
+      "members": {"mom": "admin", "dad": "admin"},
+      "steps": [
+        {"action": "seedRaw", "sql": "INSERT INTO app_wellness_check_in__checkins (id, member_id, mood, checked_at) VALUES ('ci-mom', ?, 'ok', '2026-09-02T09:00:00Z'), ('ci-dad', ?, 'ok', '2026-09-02T09:05:00Z')", "params": ["{{mom}}", "{{dad}}"]},
+        {"action": "db", "as": "mom", "sql": "SELECT id FROM app_wellness_check_in__checkins ORDER BY id", "expect": {"status": 200, "rowCount": 2}},
+        {"action": "db", "as": "mom", "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, claimed_by, claimed_at, source_event_id, created_at) VALUES (?, ?, 'missed_checkin', 'claimed', ?, ?, ?, ?)", "params": ["rm", "{{dad}}", "{{mom}}", "2026-03-10T11:00:00Z", "checkin:p1:2026-03-10", "2026-03-10T11:00:00Z"], "expect": {"status": 200}},
+        {"action": "db", "as": "dad", "sql": "SELECT id, member_id FROM app_wellness_check_in__requests", "expect": {"status": 200, "rowCount": 1, "rowsContain": [{"id": "rm", "member_id": "scn-mom"}]}}
+      ]
+    },
+    {
+      "name": "in a roster a member cannot take a request about another member or about the steward; the steward takes it",
+      "context": "shared_space.roster",
+      "members": {"a": "adult", "b": "adult", "steward": "admin"},
+      "steps": [
+        {"action": "seedRaw", "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, created_at) VALUES ('rb', ?, 'call', 'open', ?), ('rs', ?, 'call', 'open', ?)", "params": ["{{b}}", "2026-03-10T10:00:00Z", "{{steward}}", "2026-03-10T10:00:00Z"]},
+        {"action": "db", "as": "a", "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL)) RETURNING id", "params": ["{{a}}", "2026-03-10T10:05:00Z", "rb"], "expect": {"status": 200, "rowCount": 0}},
+        {"action": "db", "as": "a", "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL)) RETURNING id", "params": ["{{a}}", "2026-03-10T10:05:00Z", "rs"], "expect": {"status": 200, "rowCount": 0}},
+        {"action": "db", "as": "steward", "sql": "UPDATE app_wellness_check_in__requests SET status = 'claimed', claimed_by = ?, claimed_at = ? WHERE id = ? AND (status = 'open' OR (status = 'claimed' AND claimed_by IS NULL)) RETURNING id", "params": ["{{steward}}", "2026-03-10T10:06:00Z", "rb"], "expect": {"status": 200, "rowCount": 1}}
+      ]
+    },
+    {
+      "name": "in a shared space a request cannot be moved to another member, and only the person it is about writes its note",
+      "context": "shared_space",
+      "members": {"a": "adult", "b": "adult", "steward": "admin"},
+      "steps": [
+        {"action": "db", "as": "a", "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, opened_on, created_at) VALUES (?, ?, 'call', 'open', ?, ?, ?)", "params": ["ra", "{{a}}", "Please ring after six", "2026-03-10", "2026-03-10T10:00:00Z"], "expect": {"status": 200}},
+        {"action": "db", "as": "b", "sql": "UPDATE app_wellness_check_in__requests SET member_id = ? WHERE id = ?", "params": ["{{b}}", "ra"], "expect": {"status": 403}},
+        {"action": "db", "as": "steward", "sql": "UPDATE app_wellness_check_in__requests SET member_id = ? WHERE id = ?", "params": ["{{b}}", "ra"], "expect": {"status": 403}},
+        {"action": "db", "as": "b", "sql": "UPDATE app_wellness_check_in__requests SET note = ? WHERE id = ? RETURNING id", "params": ["changed", "ra"], "expect": {"status": 200, "rowCount": 0}},
+        {"action": "db", "as": "a", "sql": "UPDATE app_wellness_check_in__requests SET note = ? WHERE id = ? RETURNING id", "params": ["Ring after seven", "ra"], "expect": {"status": 200, "rowCount": 1}},
+        {"action": "db", "as": "b", "sql": "SELECT note FROM app_wellness_check_in__requests WHERE id = ?", "params": ["ra"], "expect": {"status": 200, "rowCount": 1, "rowsContain": [{"note": "Ring after seven"}]}}
       ]
     }
   ]

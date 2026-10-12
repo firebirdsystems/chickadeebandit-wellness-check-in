@@ -60,16 +60,25 @@ Open requests also appear on the Today list, under whoever took them.
 
 ## Access model
 
-- `profiles` — `adult_writable`: the whole household (the care circle) reads the
-  status board; only adults create/configure/pause profiles.
+- `profiles` — `adult_writable` with `member_read_column`: a member reads their
+  own profile; whoever supervises reads and configures everyone's. That is any
+  adult in a household and the steward alone in a shared space, where another
+  adult sets up and manages only their own. In a roster only the steward
+  writes profiles.
 - `checkins` — `owner_only` (`adults_bypass: true`): display-only history for the
   board. `INSERT` forces `member_id` to the caller, so a member can only log their
-  own check-ins; adults (caregivers) can read everyone's history.
+  own check-ins; whoever supervises reads everyone's history.
 
-- `requests` — `owner_only` (`adults_bypass: true`): the person a request is about
-  reads it and can raise or withdraw their own call request; adults read and
-  handle everyone's (the steward alone in a shared space). Claims are guarded in
-  SQL (`WHERE status = 'open'`), so a second claim changes nothing.
+- `requests` — `owner_or_visibility` (every row carries `visibility = 'adults'`):
+  the person a request is about reads it and can raise or withdraw their own
+  call request; any adult reads and takes everyone's, in a household and in a
+  shared space (in a roster, the steward alone). Only whoever supervises opens
+  a request about someone else. Who a request is about cannot be changed
+  afterwards, and only that person writes its `note`. Claims are guarded in SQL
+  (`WHERE status = 'open'`), so a second claim changes nothing.
+  Taking or handing back a request notifies the profile's chosen relatives
+  when the sender can read that profile. A relative taking part in a shared
+  space cannot, so their change shows on the board and is not pushed.
 
 The authoritative escalation timer is `profiles.last_checkin_at`, written by the
 trusted hub endpoint — the `checkins` log is for the streak/history display only.

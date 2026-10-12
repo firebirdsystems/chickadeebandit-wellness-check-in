@@ -1,0 +1,128 @@
+{
+  "scenarios": [
+    {
+      "name": "in a shared space a participant may add only themself and can take another member's call request; the steward may add anyone",
+      "context": "shared_space",
+      "members": {
+        "steward": "admin",
+        "pat": "adult",
+        "sam": "adult"
+      },
+      "steps": [
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__profiles (id, member_id, active, created_at, updated_at) VALUES ('pf-sam', ?, 0, ?, ?)",
+          "params": [
+            "{{sam}}",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:00:00Z"
+          ]
+        },
+        {
+          "action": "seedRaw",
+          "sql": "INSERT INTO app_wellness_check_in__requests (id, member_id, kind, status, note, created_at) VALUES ('rq-sam', ?, 'call', 'open', 'Please ring me tonight', ?)",
+          "params": [
+            "{{sam}}",
+            "2026-01-01T00:00:00Z"
+          ]
+        },
+        {
+          "action": "open",
+          "as": "pat"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"scope-note\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"add-profile\"][data-scope=\"self\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "pat",
+          "selector": "[data-testid=\"add-profile\"][data-scope=\"anyone\"]",
+          "count": 0
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"request\"][data-request-id=\"rq-sam\"][data-request-state=\"open\"]"
+        },
+        {
+          "action": "click",
+          "as": "pat",
+          "selector": "[data-testid=\"claim-request\"][data-request-id=\"rq-sam\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"request\"][data-request-id=\"rq-sam\"][data-request-state=\"claimed\"]"
+        },
+        {
+          "action": "reload",
+          "as": "pat"
+        },
+        {
+          "action": "expectVisible",
+          "as": "pat",
+          "selector": "[data-testid=\"request\"][data-request-id=\"rq-sam\"][data-request-state=\"claimed\"]"
+        },
+        {
+          "action": "expectText",
+          "as": "pat",
+          "selector": "[data-testid=\"request\"][data-request-id=\"rq-sam\"]",
+          "text": "You’re handling this"
+        },
+        {
+          "action": "open",
+          "as": "sam"
+        },
+        {
+          "action": "expectVisible",
+          "as": "sam",
+          "selector": "[data-testid=\"board-card\"][data-profile-id=\"pf-sam\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "sam",
+          "selector": "[data-testid=\"claim-request\"]",
+          "count": 0
+        },
+        {
+          "action": "open",
+          "as": "steward"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"add-profile\"][data-scope=\"anyone\"]"
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"add-profile\"][data-scope=\"self\"]",
+          "count": 0
+        },
+        {
+          "action": "expectCount",
+          "as": "steward",
+          "selector": "[data-testid=\"scope-note\"]",
+          "count": 0
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"board-card\"][data-profile-id=\"pf-sam\"]"
+        },
+        {
+          "action": "expectVisible",
+          "as": "steward",
+          "selector": "[data-testid=\"request\"][data-request-id=\"rq-sam\"][data-request-state=\"claimed\"]"
+        }
+      ]
+    }
+  ]
+}

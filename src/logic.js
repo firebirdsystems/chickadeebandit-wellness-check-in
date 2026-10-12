@@ -442,14 +442,97 @@ export function missedCheckins(profiles, checkins, requests, { today, dayOf, now
 }
 
 /**
- * Who a request's notification goes to: the profile's chosen relatives, or
- * every adult when none are chosen. A sender who is not an adult may only
- * address "adults" under the household's default notification policy, so they
- * always get that audience.
+ * Whether the sender can tell who a request's notification is for. They can
+ * with the person's profile in hand. Without it they can only when they would
+ * have it if it existed: `readsTheirProfile` is true for whoever supervises
+ * (and for the person themself), and then no profile means nobody was chosen,
+ * so all adults. The caller reads the profiles afresh before asking, and
+ * sends nothing if that read fails. Otherwise the profile may exist unread,
+ * with relatives chosen on it (a relative taking part in a shared space), and
+ * nothing is sent: "all adults" would be a guess that tells people who were
+ * never chosen. The board shows them the change instead.
+ */
+export function knowsRequestAudience(profile, readsTheirProfile) {
+  return !!profile || readsTheirProfile === true;
+}
+
+/**
+ * Who a request's notification goes to: the profile's chosen relatives without
+ * the sender, or every adult when none are chosen. A chosen list the sender
+ * was the only one on comes back empty, and nothing is sent: it does not
+ * widen to all adults. A sender who is not an adult may only address "adults"
+ * under the household's default notification policy, so they always get that
+ * audience.
  */
 export function notifyAudience(profile, senderId, senderIsAdult) {
   let ids = [];
   try { ids = JSON.parse(profile?.recipient_member_ids || "[]"); } catch { ids = []; }
-  const others = (Array.isArray(ids) ? ids : []).filter(id => typeof id === "string" && id && id !== senderId);
-  return senderIsAdult && others.length ? others : "adults";
+  const chosen = (Array.isArray(ids) ? ids : []).filter(id => typeof id === "string" && id);
+  if (!senderIsAdult || !chosen.length) return "adults";
+  return chosen.filter(id => id !== senderId);
+}
+
+function isAdultMember(member) {
+  return !!member && (member.role === "adult" || member.role === "admin");
+}
+
+/**
+ * Whether a member looks after the whole care circle: reads everyone's
+ * profiles and check-ins and sets up a profile for someone else. Mirrors the
+ * hub's rule for those two tables (adult_writable with a member read column,
+ * owner_only with adults_bypass): any adult in a household, and only the
+ * steward in a shared space. An adult who merely takes part in a space reads
+ * and writes their own profile and check-ins alone. Requests are wider than
+ * this: see takesOthersRequests.
+ */
+export function supervisesCareCircle(member, { tenantKind = "household", isAdmin = false } = {}) {
+  return tenantKind === "household" ? isAdultMember(member) : isAdmin === true;
+}
+
+/**
+ * Whether a member may change, pause or delete a profile. Whoever supervises
+ * the care circle manages every profile; any other adult manages their own,
+ * except in a roster, where the steward alone writes profiles.
+ */
+export function canManageProfile(profile, member, tenant = {}) {
+  if (!profile || !member) return false;
+  if (supervisesCareCircle(member, tenant)) return true;
+  return tenant.spaceKind !== "roster" && isAdultMember(member) && profile.member_id === member.id;
+}
+
+/**
+ * The members a new profile may be set up for. Whoever supervises picks from
+ * everyone without one. Any other adult may only add themself (the hub
+ * refuses a profile they create for someone else), and nobody in a roster.
+ * `profiles` is what the member can read, so for them it holds only their own.
+ */
+export function profileSubjects(members, profiles, member, tenant = {}) {
+  if (!member) return [];
+  const taken = new Set((profiles ?? []).map(p => p.member_id));
+  const free = (members ?? []).filter(m => !taken.has(m.id));
+  if (supervisesCareCircle(member, tenant)) return free;
+  if (tenant.spaceKind === "roster" || !isAdultMember(member)) return [];
+  return free.filter(m => m.id === member.id);
+}
+
+/**
+ * Whether a member may open a request about someone else, which is what
+ * picking up a missed check-in does. Mirrors the hub's supervisor_assigns_owner
+ * grant on the requests table: whoever supervises the care circle, except in a
+ * co-parenting space, where a request one parent opens is recorded as their own.
+ */
+export function opensRequestsForOthers(member, tenant = {}) {
+  return tenant.spaceKind !== "coparenting" && supervisesCareCircle(member, tenant);
+}
+
+/**
+ * Whether a member may take a request about someone else. Every request is
+ * readable, and so writable, by any adult (owner_or_visibility with the
+ * 'adults' value) in a household and in a shared space. A roster is the
+ * exception: there the hub keeps a member's writes to their own rows, so only
+ * the steward takes one.
+ */
+export function takesOthersRequests(member, tenant = {}) {
+  if (tenant.spaceKind === "roster") return tenant.isAdmin === true;
+  return isAdultMember(member);
 }
