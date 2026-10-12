@@ -227,6 +227,10 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       return json;
     }
 
+    // A failed write says one fixed line for the action. The hub's own error
+    // text goes to the console, never to the page.
+    function failText(e, line) { if (!e?.forUser) console.error(e); return e?.forUser ? e.message : line; }
+
     // ── loading ───────────────────────────────────────────────────────────────
 
     /**
@@ -634,7 +638,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (res.status === 402) { entitled = false; return flash({ err: "Monitoring is paused while the household's plan is inactive — ask an admin to renew." }); }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        return flash({ err: data.error ?? "Check-in failed." });
+        console.error("check-in failed", res.status, data.error);
+        return flash({ err: "Couldn’t check in — try again." });
       }
       entitled = true;
       // 2. Optimistically reflect the check-in locally — the hub already reset the
@@ -742,7 +747,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           [r.id, r.member_id, r.note, hubToday(), r.created_at]);
       } catch (e) {
         sendingCall = false;
-        return modalError(e.message);
+        return modalError(failText(e, "Couldn’t send the request — try again."));
       }
       sendingCall = false;
       requests = [r, ...requests];
@@ -780,7 +785,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await loadRequests().catch(() => { if (gone) requests = requests.filter(x => !(x.id === id && requestState(x) === "open")); });
         if (!gone && requests.some(x => x.id === id)) return flash({ err: "Someone has already picked this up, so it can’t be withdrawn." });
         flash({ ok: "Call request withdrawn." });
-      } catch (e) { flash({ err: e.message }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t withdraw the request — try again.") }); }
     }
 
     // Two relatives can tap at the same moment. The WHERE lets exactly one of
@@ -808,7 +813,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           announce("wellness.request_claimed", r);
           tellClaimed(r);
         }
-      } catch (e) { flash({ err: e.message }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t take the request — try again.") }); }
     }
 
     // A missed check-in has no row until someone takes it. The source key is
@@ -837,7 +842,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         // member's own, and it is theirs, not someone else's.
         if (!(landed && landed.id === r.id)) {
           const taken = !!landed || /UNIQUE/i.test(e?.message ?? "");
-          return flash({ err: taken ? "Someone else just took this one." : (e?.message || "Couldn’t reach the hub. Try again.") });
+          return flash({ err: taken ? "Someone else just took this one." : failText(e, "Couldn’t take this one — try again.") });
         }
       }
       await loadRequests().catch(() => {});
@@ -863,7 +868,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           // Keyed on the moment: the same request can be handed back twice.
           tell(r, "Still needs someone", `${requestKind(r.kind).headline(memberName(r.member_id))}, and ${ME.name ?? "a relative"} can’t take it after all.`, `released:${Date.now()}`);
         }
-      } catch (e) { flash({ err: e.message }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t hand the request back — try again.") }); }
     }
 
     function openFollowUp(id) {
@@ -899,7 +904,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         if (r && r.status !== "done") Object.assign(r, { status: "done", followup_note: note, closed_at: closedAt });
         flash({ ok: "Follow-up recorded." });
         if (r) announce("wellness.request_closed", r);
-      } catch (e) { modalError(e.message); }
+      } catch (e) { modalError(failText(e, "Couldn’t record the follow-up — try again.")); }
     }
 
     // ── arm / disarm / delete ─────────────────────────────────────────────────
@@ -911,7 +916,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
         await loadProfiles();
         flash({ ok: "Monitoring started. The clock begins at the first check-in." });
-      } catch (e) { flash({ err: e.message }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t start monitoring — try again.") }); }
     }
 
     async function disarmProfile(id) {
@@ -920,7 +925,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await db(`UPDATE ${T}profiles SET active = 0, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
         await loadProfiles();
         flash({ ok: "Monitoring paused." });
-      } catch (e) { flash({ err: e.message }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t pause monitoring — try again.") }); }
     }
 
     async function deleteProfile(id) {
@@ -931,7 +936,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await db(`DELETE FROM ${T}profiles WHERE id = ?`, [id]);
         await loadProfiles();
         flash({ ok: "Profile deleted." });
-      } catch (e) { flash({ err: e.message }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t delete the profile — try again.") }); }
     }
 
     // ── config modal (add / edit) ─────────────────────────────────────────────
@@ -1103,7 +1108,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         flash({ ok: existingId ? "Settings saved." : "Check-in added. Start monitoring when ready." });
       } catch (e) {
         if (btn) { btn.disabled = false; btn.textContent = existingId ? "Save" : "Add"; }
-        modalError(e.message);
+        modalError(failText(e, "Couldn’t save the check-in — try again."));
       }
     }
 
