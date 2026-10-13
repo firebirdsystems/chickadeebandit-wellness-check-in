@@ -209,9 +209,10 @@ export function checkinTimesValue(time) {
 /**
  * What is stored in profiles.timed_alert_member_ids.
  *
- * Blank, never "[]", when nobody is picked: the reminder protocol reads an
- * explicit empty list as "this lane is switched off", where this app's own
- * recipients list has always meant "all adults" when empty.
+ * Blank when nobody is picked, which the reminder protocol reads as its
+ * audience, all adults. The hub can still leave "[]" here by pruning the last
+ * relative named; the lane declares `empty_list: "audience"`, so that reads
+ * as all adults too.
  */
 export function timedAlertValue(recipientIds) {
   const ids = (recipientIds ?? []).filter(id => typeof id === "string" && id);

@@ -198,7 +198,7 @@
       "member_column": "member_id"
     },
     "nudge": { "at_minutes": 0, "audience": "owner" },
-    "escalation": { "grace_minutes": 60, "audience": "adults", "member_column": "timed_alert_member_ids" },
+    "escalation": { "grace_minutes": 60, "audience": "adults", "member_column": "timed_alert_member_ids", "empty_list": "audience" },
     "on_no_recipients": "adults"
   }
 }

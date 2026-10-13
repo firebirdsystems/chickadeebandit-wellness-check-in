@@ -48,10 +48,10 @@ ALTER TABLE app_wellness_check_in__profiles ADD COLUMN checkin_times TEXT NOT NU
 -- What the reminder is called in a notification. The label is optional, and a
 -- relative watching two people needs more than the app's name.
 ALTER TABLE app_wellness_check_in__profiles ADD COLUMN reminder_title TEXT NOT NULL DEFAULT '';
--- Who hears about a missed agreed time. NOT recipient_member_ids: there an
--- empty list means "all adults", while the reminder protocol reads an explicit
--- '[]' as "nobody, lane off". The app writes this one as blank (all adults) or
--- a non-empty list, and never as '[]'.
+-- Who hears about a missed agreed time: the agreed-time lane's own audience
+-- column, beside recipient_member_ids. The app writes it as blank (all adults)
+-- or a non-empty list. The hub can leave '[]' by pruning the last relative
+-- named; the lane declares empty_list: "audience", so that is all adults too.
 ALTER TABLE app_wellness_check_in__profiles ADD COLUMN timed_alert_member_ids TEXT NOT NULL DEFAULT '';
 
 -- A check-in now also answers the day's agreed time, which the hub matches on

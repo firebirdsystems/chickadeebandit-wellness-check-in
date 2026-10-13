@@ -199,12 +199,6 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       spaceKind: window.__SPACE_KIND ?? null,
       isAdmin: IS_ADMIN,
     };
-    // Who may write a profile at all. In a roster (a care coordinator's client
-    // list) that's the steward alone; elsewhere any adult, though one who only
-    // takes part in a shared space reaches just their own. Matches the hub
-    // profiles policy (adult_writable + member_read_column +
-    // steward_writes_only). Checking in is never gated — that's every member's.
-    const canSteward = () => IS_ROSTER ? IS_ADMIN : iAmAdult();
     // Who sees the whole board and adds a profile for someone else: any adult
     // at home, only the steward in a shared space.
     const supervises = () => supervisesCareCircle(ME, TENANT);
@@ -223,13 +217,28 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         body: JSON.stringify({ sql, params }),
       });
       const json = await res.json().catch(() => null);
-      if (!res.ok || !json || typeof json !== "object" || json.error) throw new Error(json?.error || "Couldn’t reach the hub. Try again.");
+      if (!res.ok || !json || typeof json !== "object" || json.error) throw Object.assign(new Error(json?.error || "Couldn’t reach the hub. Try again."), { status: res.status, code: json?.code });
       return json;
     }
 
     // A failed write says one fixed line for the action. The hub's own error
-    // text goes to the console, never to the page.
-    function failText(e, line) { if (!e?.forUser) console.error(e); return e?.forUser ? e.message : line; }
+    // text goes to the console, never to the page. Two answers are not ones to
+    // try again: 403 is a row policy saying no, 507 is the household out of
+    // room. Everything else may pass the next time, a plain 400 included.
+    function userError(msg) { return Object.assign(new Error(msg), { forUser: true }); }
+    function failText(e, what) {
+      if (e?.forUser) return e.message;
+      console.error(e);
+      if (e?.code === "space_read_only") return `${what}. This space is read-only until its sponsor’s plan is renewed.`;
+      if (e?.code === "household_read_only") return `${what}. The household is read-only until its plan is renewed.`;
+      if (e?.status === 403) return `${what}. That isn’t allowed here.`;
+      if (e?.status === 507) return `${what}. The household’s storage is full.`;
+      return `${what} — try again.`;
+    }
+    // The row is already there. The hub names it with a code; one that
+    // predates the code says it in SQLite's words.
+    const alreadyThere = e => e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(e?.message ?? "");
+    const PROFILE_GONE = "That check-in could not be changed. It may have been removed, or it is not yours to change.";
 
     // ── loading ───────────────────────────────────────────────────────────────
 
@@ -639,7 +648,10 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         console.error("check-in failed", res.status, data.error);
-        return flash({ err: "Couldn’t check in — try again." });
+        if (res.status === 404) await loadProfiles().catch(() => {});
+        return flash({ err: res.status === 404
+          ? "Couldn’t check in. No check-in is set up for you any more — ask whoever set it up to take a look."
+          : "Couldn’t check in — try again." });
       }
       entitled = true;
       // 2. Optimistically reflect the check-in locally — the hub already reset the
@@ -731,14 +743,20 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
     }
 
     let sendingCall = false;
+    // One id until a request is known to be sent, however many taps or forms
+    // it takes: a retry after a lost answer then meets its own row instead of
+    // adding a second.
+    let pendingCallId = null;
     async function requestCall() {
       if (sendingCall) return;
       const note = modalEl.querySelector("#rq-note").value.trim();
       const err = validateNote(note);
       if (err) return modalError(err);
       sendingCall = true;
+      const retry = !!pendingCallId;
+      pendingCallId ??= crypto.randomUUID();
       const r = {
-        id: crypto.randomUUID(), member_id: ME.id, kind: "call", status: "open", note,
+        id: pendingCallId, member_id: ME.id, kind: "call", status: "open", note,
         claimed_by: null, claimed_at: null, followup_note: "", closed_at: null,
         source_event_id: null, created_at: new Date().toISOString(),
       };
@@ -746,11 +764,49 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await db(`INSERT INTO ${T}requests (id, member_id, kind, status, note, opened_on, created_at) VALUES (?, ?, 'call', 'open', ?, ?, ?)`,
           [r.id, r.member_id, r.note, hubToday(), r.created_at]);
       } catch (e) {
-        sendingCall = false;
-        return modalError(failText(e, "Couldn’t send the request — try again."));
+        // The insert can land and its answer be lost: look before saying it
+        // failed. If the board can't be read either, the id being there
+        // already says an earlier try landed.
+        await loadRequests().catch(() => {});
+        const landed = requests.find(x => x.id === r.id);
+        if (!landed && !(retry && alreadyThere(e))) {
+          sendingCall = false;
+          return modalError(failText(e, "Couldn’t send the request"));
+        }
+        if (landed) {
+          // What landed is what relatives see, so that is what gets announced,
+          // with the note as it reads now if the row will still take it.
+          Object.assign(r, landed);
+          if (requestState(r) !== "open") {
+            sendingCall = false;
+            pendingCallId = null;
+            closeModal();
+            render();
+            announce("wellness.call_requested", r);
+            return flash({ ok: "Your request is on the board, and someone already has it." });
+          }
+          if (r.note !== note) {
+            try {
+              const res = await db(`UPDATE ${T}requests SET note = ? WHERE id = ? AND status = 'open'`, [note, r.id]);
+              if (res.changed) r.note = note;
+            } catch (e2) { console.error(e2); }
+          }
+        } else {
+          // The row is there but can't be read, so its note is unknown. Only a
+          // note the row is seen to take may be shown and sent to relatives.
+          let kept = false;
+          try {
+            kept = !!(await db(`UPDATE ${T}requests SET note = ? WHERE id = ? AND status = 'open'`, [note, r.id])).changed;
+          } catch (e2) { console.error(e2); }
+          if (!kept) {
+            sendingCall = false;
+            return modalError("Couldn’t send the request — try again.");
+          }
+        }
       }
       sendingCall = false;
-      requests = [r, ...requests];
+      pendingCallId = null;
+      requests = [r, ...requests.filter(x => x.id !== r.id)];
       closeModal();
       render();   // the request shows at once; the line about who was told follows the send
       // Who is chosen may have changed since this page last looked; if the
@@ -765,8 +821,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       const anyone = !(Array.isArray(audience) && !audience.length);
       const sent = !DB || (known && anyone && !!(await sendHubNotification({
         title: `${ME.name ?? "Someone"} would like a call`,
-        body: note || "Open Wellness Check-In to say you’ve got it.",
-        generic: note ? { body: "Open Wellness Check-In to say you’ve got it." } : undefined,
+        body: r.note || "Open Wellness Check-In to say you’ve got it.",
+        generic: r.note ? { body: "Open Wellness Check-In to say you’ve got it." } : undefined,
         audience,
         url: `/run/${APP_ID}`,
         idempotencyKey: `${APP_ID}:call:${r.id}`,
@@ -785,7 +841,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await loadRequests().catch(() => { if (gone) requests = requests.filter(x => !(x.id === id && requestState(x) === "open")); });
         if (!gone && requests.some(x => x.id === id)) return flash({ err: "Someone has already picked this up, so it can’t be withdrawn." });
         flash({ ok: "Call request withdrawn." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t withdraw the request — try again.") }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t withdraw the request") }); }
     }
 
     // Two relatives can tap at the same moment. The WHERE lets exactly one of
@@ -813,7 +869,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           announce("wellness.request_claimed", r);
           tellClaimed(r);
         }
-      } catch (e) { flash({ err: failText(e, "Couldn’t take the request — try again.") }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t take the request") }); }
     }
 
     // A missed check-in has no row until someone takes it. The source key is
@@ -841,8 +897,8 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         // The insert can land and its answer be lost: then the row is this
         // member's own, and it is theirs, not someone else's.
         if (!(landed && landed.id === r.id)) {
-          const taken = !!landed || /UNIQUE/i.test(e?.message ?? "");
-          return flash({ err: taken ? "Someone else just took this one." : failText(e, "Couldn’t take this one — try again.") });
+          const taken = !!landed || alreadyThere(e);
+          return flash({ err: taken ? "Someone else just took this one." : failText(e, "Couldn’t take this one") });
         }
       }
       await loadRequests().catch(() => {});
@@ -868,7 +924,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           // Keyed on the moment: the same request can be handed back twice.
           tell(r, "Still needs someone", `${requestKind(r.kind).headline(memberName(r.member_id))}, and ${ME.name ?? "a relative"} can’t take it after all.`, `released:${Date.now()}`);
         }
-      } catch (e) { flash({ err: failText(e, "Couldn’t hand the request back — try again.") }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t hand the request back") }); }
     }
 
     function openFollowUp(id) {
@@ -904,7 +960,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         if (r && r.status !== "done") Object.assign(r, { status: "done", followup_note: note, closed_at: closedAt });
         flash({ ok: "Follow-up recorded." });
         if (r) announce("wellness.request_closed", r);
-      } catch (e) { modalError(failText(e, "Couldn’t record the follow-up — try again.")); }
+      } catch (e) { modalError(failText(e, "Couldn’t record the follow-up")); }
     }
 
     // ── arm / disarm / delete ─────────────────────────────────────────────────
@@ -913,19 +969,22 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (!canManage(profiles.find(x => x.id === id))) return;
       if (entitled === false) return flash({ err: "Monitoring is paused while the household's plan is inactive — ask an admin to renew." });
       try {
-        await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
-        await loadProfiles();
+        const res = await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
+        if (DB && !res.changed) { await loadProfiles().catch(() => {}); throw userError(PROFILE_GONE); }
+        // The write has landed; a failed re-read must not report it as failed.
+        await loadProfiles().catch(() => { const p = profiles.find(x => x.id === id); if (p) p.active = 1; });
         flash({ ok: "Monitoring started. The clock begins at the first check-in." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t start monitoring — try again.") }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t start monitoring") }); }
     }
 
     async function disarmProfile(id) {
       if (!canManage(profiles.find(x => x.id === id))) return;
       try {
-        await db(`UPDATE ${T}profiles SET active = 0, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
-        await loadProfiles();
+        const res = await db(`UPDATE ${T}profiles SET active = 0, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
+        if (DB && !res.changed) { await loadProfiles().catch(() => {}); throw userError(PROFILE_GONE); }
+        await loadProfiles().catch(() => { const p = profiles.find(x => x.id === id); if (p) p.active = 0; });
         flash({ ok: "Monitoring paused." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t pause monitoring — try again.") }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t pause monitoring") }); }
     }
 
     async function deleteProfile(id) {
@@ -933,10 +992,16 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (!canManage(p)) return;
       if (!(await hubConfirm({ message: `Delete ${profileTitle(p, members)}?`, description: "Monitoring stops immediately. Check-in history is kept.", confirmLabel: "Delete", destructive: true }))) return;
       try {
-        await db(`DELETE FROM ${T}profiles WHERE id = ?`, [id]);
-        await loadProfiles();
+        const res = await db(`DELETE FROM ${T}profiles WHERE id = ?`, [id]);
+        if (DB && !res.changed) {
+          // Nothing removed and still there: refused. Gone: an earlier try landed.
+          await loadProfiles();
+          if (profiles.some(x => x.id === id)) throw userError("That check-in could not be deleted. It is not yours to remove.");
+        } else {
+          await loadProfiles().catch(() => { profiles = profiles.filter(x => x.id !== id); });
+        }
         flash({ ok: "Profile deleted." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t delete the profile — try again.") }); }
+      } catch (e) { flash({ err: failText(e, "Couldn’t delete the profile") }); }
     }
 
     // ── config modal (add / edit) ─────────────────────────────────────────────
@@ -1062,7 +1127,17 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         try {
           const res = await fetch(XC_INVITE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: norm, name: name || undefined }) });
           if (res.status === 402) { entitled = false; return modalError("Adding external contacts needs an active plan."); }
-          if (!res.ok) { const d = await res.json().catch(() => ({})); return modalError(d.error ?? "Couldn’t send the confirmation email."); }
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            console.error("invite failed", res.status, d.error);
+            // The refusals a person can act on keep a line of their own.
+            return modalError(
+              res.status === 403 ? "Only adults can add external contacts."
+              : res.status === 429 ? "The household has reached this month’s email limit."
+              : res.status === 409 && /unsubscribed/i.test(d.error ?? "") ? "That address has unsubscribed from this household’s emails."
+              : res.status === 409 && /limit/i.test(d.error ?? "") ? "The household has reached its limit of external contacts. Remove one that is no longer needed first."
+              : "Couldn’t send the confirmation email.");
+          }
           const { contact } = await res.json();
           if (contact) externalContacts.set(norm, { status: contact.status, name: contact.name || name || "" });
         } catch { return modalError("Couldn’t send the confirmation email."); }
@@ -1073,6 +1148,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       renderModalEmails();
     }
 
+    const pendingProfileIds = {};
     async function saveConfig(existingId) {
       const subjectId = modalEl.querySelector("#cf-subject").value;
       if (!subjectId) return modalError("Choose who is checking in.");
@@ -1093,43 +1169,57 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       // The three columns the agreed-time reminder reads, always written with
       // the recipients they are derived from so the two can't drift on a save.
       const timed = [checkinTimesValue(cfg.checkinTime), reminderTitle(cfg.label, memberMap.get(subjectId)?.name), timedAlertValue(cfg.recipientIds)];
+      // One id per person until an Add is known to have landed: if it lands
+      // and its answer is lost, the next tap meets that row and saves over it.
+      const retry = !existingId && subjectId in pendingProfileIds;
+      const id = existingId ?? (pendingProfileIds[subjectId] ??= crypto.randomUUID());
+      const update = () => db(`UPDATE ${T}profiles SET label = ?, interval_hours = ?, message = ?, recipient_member_ids = ?, recipient_emails = ?, checkin_times = ?, reminder_title = ?, timed_alert_member_ids = ?, updated_at = ? WHERE id = ?`,
+        [cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), ...timed, now, id]);
       try {
         if (existingId) {
-          await db(`UPDATE ${T}profiles SET label = ?, interval_hours = ?, message = ?, recipient_member_ids = ?, recipient_emails = ?, checkin_times = ?, reminder_title = ?, timed_alert_member_ids = ?, updated_at = ? WHERE id = ?`,
-            [cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), ...timed, now, existingId]);
+          const res = await update();
+          if (DB && !res.changed) {
+            await loadProfiles().catch(() => {});
+            // Gone: there is nothing left for this form to save.
+            if (!profiles.some(x => x.id === id)) { closeModal(); return flash({ err: PROFILE_GONE }); }
+            throw userError(PROFILE_GONE);
+          }
         } else {
-          const id = crypto.randomUUID();
-          await db(`INSERT INTO ${T}profiles (id, member_id, label, active, interval_hours, message, recipient_member_ids, recipient_emails, checkin_times, reminder_title, timed_alert_member_ids, created_at, updated_at)
-                    VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [id, subjectId, cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), ...timed, now, now]);
+          try {
+            await db(`INSERT INTO ${T}profiles (id, member_id, label, active, interval_hours, message, recipient_member_ids, recipient_emails, checkin_times, reminder_title, timed_alert_member_ids, created_at, updated_at)
+                      VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [id, subjectId, cfg.label, daysToHours(cfg.intervalDays), cfg.message, JSON.stringify(cfg.recipientIds), JSON.stringify(cfg.recipientEmails), ...timed, now, now]);
+          } catch (e) {
+            if (!(retry && alreadyThere(e))) throw e;
+            const res = await update();
+            if (DB && !res.changed) throw userError(PROFILE_GONE);
+          }
         }
-        await loadProfiles();
+        delete pendingProfileIds[subjectId];
+        // The write has landed; a failed re-read must not report it as failed.
+        // The card and the next edit then start from what was just saved.
+        await loadProfiles().catch(() => {
+          let p = profiles.find(x => x.id === id);
+          // A new profile has to be on the board too, or the person is still
+          // offered and a second Add makes a second profile.
+          if (!p) profiles.push(p = { id, member_id: subjectId, active: 0, last_checkin_at: null, last_alerted_at: null, created_at: now });
+          Object.assign(p, {
+            label: cfg.label, interval_hours: daysToHours(cfg.intervalDays), message: cfg.message,
+            recipient_member_ids: JSON.stringify(cfg.recipientIds), recipient_emails: JSON.stringify(cfg.recipientEmails),
+            checkin_times: timed[0], reminder_title: timed[1], timed_alert_member_ids: timed[2], updated_at: now,
+          });
+        });
         closeModal();
         flash({ ok: existingId ? "Settings saved." : "Check-in added. Start monitoring when ready." });
       } catch (e) {
+        // A first Add can land and its answer be lost: look before saying it
+        // failed, so closing the form and starting again can't add a second.
+        if (!existingId && !retry) {
+          await loadProfiles().catch(() => {});
+          if (profiles.some(x => x.id === id)) { delete pendingProfileIds[subjectId]; closeModal(); return flash({ ok: "Check-in added. Start monitoring when ready." }); }
+        }
         if (btn) { btn.disabled = false; btn.textContent = existingId ? "Save" : "Add"; }
-        modalError(failText(e, "Couldn’t save the check-in — try again."));
-      }
-    }
-
-    /**
-     * When a chosen relative leaves the household the hub prunes them from both
-     * recipient lists. Pruning the LAST one leaves "[]" — "all adults" to the
-     * silence window, but "nobody" to the agreed-time reminder. Put that back
-     * to blank the next time someone who manages profiles opens the app, so a
-     * departure can't quietly switch a reminder's escalation off.
-     */
-    async function healTimedAudience() {
-      if (!DB || !canSteward()) return;
-      for (const p of profiles) {
-        let ids = [];
-        try { ids = JSON.parse(p.recipient_member_ids || "[]"); } catch { continue; }
-        const want = timedAlertValue(Array.isArray(ids) ? ids : []);
-        if ((p.timed_alert_member_ids ?? "") === want) continue;
-        try {
-          await db(`UPDATE ${T}profiles SET timed_alert_member_ids = ? WHERE id = ?`, [want, p.id]);
-          p.timed_alert_member_ids = want;
-        } catch { /* left as it is; the next visit tries again */ }
+        modalError(failText(e, "Couldn’t save the check-in"));
       }
     }
 
@@ -1193,7 +1283,6 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       loadFailed = failed;
       if (!ME && !CONTEXT) ME = members[0] ?? null; // demo mode: act as the first member
       render();
-      if (!loadFailed) healTimedAudience();
     }
 
     (async function init() {

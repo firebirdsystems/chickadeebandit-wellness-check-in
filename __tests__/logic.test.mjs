@@ -154,7 +154,7 @@ describe("agreed time", () => {
     expect(L.agreedTime({ checkin_times: L.checkinTimesValue("07:15") })).toBe("07:15");
   });
 
-  it("never stores an empty list as the timed audience: blank means all adults, [] would mean nobody", () => {
+  it("stores blank, not an empty list, as the timed audience when nobody is picked", () => {
     expect(L.timedAlertValue([])).toBe("");
     expect(L.timedAlertValue(undefined)).toBe("");
     expect(L.timedAlertValue([""])).toBe("");

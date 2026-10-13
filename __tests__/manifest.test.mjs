@@ -163,12 +163,22 @@ describe("requests and the agreed-time reminder", () => {
   });
 
   it("the timed audience is its own column, never the silence window's list", () => {
-    // recipient_member_ids stores "[]" for "all adults"; the reminder protocol
-    // reads "[]" as "nobody". Pointing it there would switch escalation off for
-    // every profile that left the default.
+    // The lane has its own audience column; the page writes both on every save.
     expect(reminders.escalation.member_column).toBe("timed_alert_member_ids");
     expect(manifest.inactivity_alerts.recipients_column).toBe("recipient_member_ids");
     expect(migration).toMatch(/timed_alert_member_ids TEXT NOT NULL DEFAULT ''/);
+  });
+
+  it("an emptied timed audience still means all adults, never nobody", () => {
+    // The page writes blank for "all adults", but the hub prunes a removed
+    // member out of the list (prune_list) and what that leaves when they were
+    // the only one named is "[]". Read as "nobody", a missed check-in would
+    // then alert no one while the profile still showed as active. The off
+    // switch is `active`; an empty list is never one here.
+    expect(reminders.escalation.empty_list).toBe("audience");
+    expect(reminders.enabled_column).toBe("active");
+    expect(manifest.member_references.profiles)
+      .toContainEqual({ column: "timed_alert_member_ids", on_removed: "prune_list" });
   });
 
   it("a check-in writes the three columns the reminder matches on", () => {

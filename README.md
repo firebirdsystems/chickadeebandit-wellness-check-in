@@ -35,10 +35,13 @@ there is still no check-in 60 minutes later the chosen relatives are told. A
 check-in on that household day stands both down — it is matched on
 `checkins.profile_id` / `checkin_date` / `slot`, which is why the app writes them.
 
-The silence window stays on as the backstop. The two use different audience
-columns on purpose: `recipient_member_ids` stores `[]` for "all adults", but the
-reminder protocol reads an explicit `[]` as "nobody", so the agreed-time lane
-reads `timed_alert_member_ids`, which is blank for "all adults" and never `[]`.
+The silence window stays on as the backstop. The two read different audience
+columns: `recipient_member_ids` for the silence window and
+`timed_alert_member_ids` for the agreed-time lane. In both, an empty value means
+"all adults" and never nobody: the page writes `[]` to the first and blank to
+the second, and the lane declares `empty_list: "audience"` so the `[]` the hub
+leaves when it prunes the only relative named reads the same way. The off
+switch is `active`.
 
 ## Requests: who is handling it
 
