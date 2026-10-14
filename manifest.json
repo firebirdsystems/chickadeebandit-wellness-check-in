@@ -69,8 +69,7 @@
     "checkins": {
       "kind": "owner_only",
       "member_column": "member_id",
-      "adults_bypass": true,
-      "retain_days": { "default": 365, "timestamp_column": "checked_at", "override_key": "checkin_history" }
+      "adults_bypass": true
     },
     "requests": {
       "kind": "owner_or_visibility",
@@ -84,9 +83,12 @@
         "visibility": { "writable_by": [] },
         "member_id": { "writable_by": [], "actions": ["update"] },
         "note": { "writable_by": ["owner"] }
-      },
-      "retain_days": { "default": 365, "timestamp_column": "created_at", "override_key": "request_history" }
+      }
     }
+  },
+  "retention": {
+    "checkins": { "default": 365, "timestamp_column": "checked_at", "override_key": "checkin_history" },
+    "requests": { "default": 365, "timestamp_column": "created_at", "override_key": "request_history" }
   },
   "publishes": [
     "wellness.checkin_submitted",
@@ -165,9 +167,6 @@
       "query": "SELECT COUNT(*) AS n FROM app_wellness_check_in__profiles WHERE active = 1 AND (last_checkin_at IS NULL OR last_checkin_at = '' OR date(last_checkin_at, '+' || interval_hours || ' hours') <= :today) LIMIT 1"
     },
     "display": { "template": "badge", "count": "n", "label": "check-ins due", "severity": "warn" }
-  },
-  "resource_limits": {
-    "max_db_bytes": 52428800
   },
   "required_capabilities": ["cron", "email"],
   "inactivity_alerts": {
