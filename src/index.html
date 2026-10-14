@@ -162,7 +162,7 @@
       formatClock, requestKind, requestState, canClaim, canResolve, canCancel,
       requestStatusLine, sortRequests, validateNote, missedSourceKey, missedCheckins, notifyAudience, knowsRequestAudience, checkinDateFor,
       supervisesCareCircle, canManageProfile, profileSubjects, opensRequestsForOthers, takesOthersRequests,
-      inviteFailureLine,
+      inviteFailureLine, failureLine,
     } from "./logic.js";
 
     document.getElementById("page-glyph").innerHTML = glyph("pulse-heart");
@@ -222,24 +222,25 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       return json;
     }
 
-    // A failed write says one fixed line for the action. The hub's own error
-    // text goes to the console, never to the page. Two answers are not ones to
-    // try again: 403 is a row policy saying no, 507 is the household out of
-    // room. Everything else may pass the next time, a plain 400 included.
+    // A failed write says the line for what happened (failureLine): "try
+    // again" only when trying again can work. The hub's own error text goes to
+    // the console, never to the page. A read-only space or household keeps a
+    // line of its own: the person can do something about it.
+    // `words` is { action, thing } in this app's nouns.
     function userError(msg) { return Object.assign(new Error(msg), { forUser: true }); }
-    function failText(e, what) {
+    function failText(e, words) {
       if (e?.forUser) return e.message;
       console.error(e);
-      if (e?.code === "space_read_only") return `${what}. This space is read-only until its sponsor’s plan is renewed.`;
-      if (e?.code === "household_read_only") return `${what}. The household is read-only until its plan is renewed.`;
-      if (e?.status === 403) return `${what}. That isn’t allowed here.`;
-      if (e?.status === 507) return `${what}. The household’s storage is full.`;
-      return `${what} — try again.`;
+      if (e?.code === "space_read_only") return `Couldn’t ${words.action}. This space is read-only until its sponsor’s plan is renewed.`;
+      if (e?.code === "household_read_only") return `Couldn’t ${words.action}. The household is read-only until its plan is renewed.`;
+      return failureLine(e, words);
     }
+    // After a profile write that changed nothing: re-read, and say whether the
+    // row is still there (undefined when the re-read failed: the outcome is unknown).
+    const profileFound = id => loadProfiles().then(() => profiles.some(x => x.id === id), (e) => { console.error(e); return undefined; });
     // The row is already there. The hub names it with a code; one that
     // predates the code says it in SQLite's words.
     const alreadyThere = e => e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(e?.message ?? "");
-    const PROFILE_GONE = "That check-in could not be changed. It may have been removed, or it is not yours to change.";
 
     // ── loading ───────────────────────────────────────────────────────────────
 
@@ -772,7 +773,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         const landed = requests.find(x => x.id === r.id);
         if (!landed && !(retry && alreadyThere(e))) {
           sendingCall = false;
-          return modalError(failText(e, "Couldn’t send the request"));
+          return modalError(failText(e, { action: "send the request", thing: "request" }));
         }
         if (landed) {
           // What landed is what relatives see, so that is what gets announced,
@@ -842,7 +843,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         await loadRequests().catch(() => { if (gone) requests = requests.filter(x => !(x.id === id && requestState(x) === "open")); });
         if (!gone && requests.some(x => x.id === id)) return flash({ err: "Someone has already picked this up, so it can’t be withdrawn." });
         flash({ ok: "Call request withdrawn." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t withdraw the request") }); }
+      } catch (e) { flash({ err: failText(e, { action: "withdraw the request", thing: "request" }) }); }
     }
 
     // Two relatives can tap at the same moment. The WHERE lets exactly one of
@@ -870,7 +871,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           announce("wellness.request_claimed", r);
           tellClaimed(r);
         }
-      } catch (e) { flash({ err: failText(e, "Couldn’t take the request") }); }
+      } catch (e) { flash({ err: failText(e, { action: "take the request", thing: "request" }) }); }
     }
 
     // A missed check-in has no row until someone takes it. The source key is
@@ -899,7 +900,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         // member's own, and it is theirs, not someone else's.
         if (!(landed && landed.id === r.id)) {
           const taken = !!landed || alreadyThere(e);
-          return flash({ err: taken ? "Someone else just took this one." : failText(e, "Couldn’t take this one") });
+          return flash({ err: taken ? "Someone else just took this one." : failText(e, { action: "take this one", thing: "request" }) });
         }
       }
       await loadRequests().catch(() => {});
@@ -925,7 +926,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           // Keyed on the moment: the same request can be handed back twice.
           tell(r, "Still needs someone", `${requestKind(r.kind).headline(memberName(r.member_id))}, and ${ME.name ?? "a relative"} can’t take it after all.`, `released:${Date.now()}`);
         }
-      } catch (e) { flash({ err: failText(e, "Couldn’t hand the request back") }); }
+      } catch (e) { flash({ err: failText(e, { action: "hand the request back", thing: "request" }) }); }
     }
 
     function openFollowUp(id) {
@@ -961,7 +962,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         if (r && r.status !== "done") Object.assign(r, { status: "done", followup_note: note, closed_at: closedAt });
         flash({ ok: "Follow-up recorded." });
         if (r) announce("wellness.request_closed", r);
-      } catch (e) { modalError(failText(e, "Couldn’t record the follow-up")); }
+      } catch (e) { modalError(failText(e, { action: "record the follow-up", thing: "request" })); }
     }
 
     // ── arm / disarm / delete ─────────────────────────────────────────────────
@@ -971,21 +972,21 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (entitled === false) return flash({ err: "Monitoring is paused while the household's plan is inactive — ask an admin to renew." });
       try {
         const res = await db(`UPDATE ${T}profiles SET active = 1, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
-        if (DB && !res.changed) { await loadProfiles().catch(() => {}); throw userError(PROFILE_GONE); }
+        if (DB && !res.changed) throw userError(failureLine(null, { action: "start monitoring", thing: "check-in", found: await profileFound(id) }));
         // The write has landed; a failed re-read must not report it as failed.
         await loadProfiles().catch(() => { const p = profiles.find(x => x.id === id); if (p) p.active = 1; });
         flash({ ok: "Monitoring started. The clock begins at the first check-in." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t start monitoring") }); }
+      } catch (e) { flash({ err: failText(e, { action: "start monitoring", thing: "check-in" }) }); }
     }
 
     async function disarmProfile(id) {
       if (!canManage(profiles.find(x => x.id === id))) return;
       try {
         const res = await db(`UPDATE ${T}profiles SET active = 0, updated_at = ? WHERE id = ?`, [new Date().toISOString(), id]);
-        if (DB && !res.changed) { await loadProfiles().catch(() => {}); throw userError(PROFILE_GONE); }
+        if (DB && !res.changed) throw userError(failureLine(null, { action: "pause monitoring", thing: "check-in", found: await profileFound(id) }));
         await loadProfiles().catch(() => { const p = profiles.find(x => x.id === id); if (p) p.active = 0; });
         flash({ ok: "Monitoring paused." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t pause monitoring") }); }
+      } catch (e) { flash({ err: failText(e, { action: "pause monitoring", thing: "check-in" }) }); }
     }
 
     async function deleteProfile(id) {
@@ -997,12 +998,12 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         if (DB && !res.changed) {
           // Nothing removed and still there: refused. Gone: an earlier try landed.
           await loadProfiles();
-          if (profiles.some(x => x.id === id)) throw userError("That check-in could not be deleted. It is not yours to remove.");
+          if (profiles.some(x => x.id === id)) throw userError(failureLine(null, { action: "delete the profile", thing: "check-in", found: true }));
         } else {
           await loadProfiles().catch(() => { profiles = profiles.filter(x => x.id !== id); });
         }
         flash({ ok: "Profile deleted." });
-      } catch (e) { flash({ err: failText(e, "Couldn’t delete the profile") }); }
+      } catch (e) { flash({ err: failText(e, { action: "delete the profile", thing: "check-in" }) }); }
     }
 
     // ── config modal (add / edit) ─────────────────────────────────────────────
@@ -1178,10 +1179,11 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
         if (existingId) {
           const res = await update();
           if (DB && !res.changed) {
-            await loadProfiles().catch(() => {});
+            const found = await profileFound(id);
+            const line = failureLine(null, { action: "save the check-in", thing: "check-in", found });
             // Gone: there is nothing left for this form to save.
-            if (!profiles.some(x => x.id === id)) { closeModal(); return flash({ err: PROFILE_GONE }); }
-            throw userError(PROFILE_GONE);
+            if (found === false) { closeModal(); return flash({ err: line }); }
+            throw userError(line);
           }
         } else {
           try {
@@ -1191,7 +1193,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           } catch (e) {
             if (!(retry && alreadyThere(e))) throw e;
             const res = await update();
-            if (DB && !res.changed) throw userError(PROFILE_GONE);
+            if (DB && !res.changed) throw userError(failureLine(null, { action: "save the check-in", thing: "check-in", found: await profileFound(id) }));
           }
         }
         delete pendingProfileIds[subjectId];
@@ -1218,7 +1220,7 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           if (profiles.some(x => x.id === id)) { delete pendingProfileIds[subjectId]; closeModal(); return flash({ ok: "Check-in added. Start monitoring when ready." }); }
         }
         if (btn) { btn.disabled = false; btn.textContent = existingId ? "Save" : "Add"; }
-        modalError(failText(e, "Couldn’t save the check-in"));
+        modalError(failText(e, { action: "save the check-in", thing: "check-in" }));
       }
     }
 
