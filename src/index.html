@@ -162,6 +162,7 @@
       formatClock, requestKind, requestState, canClaim, canResolve, canCancel,
       requestStatusLine, sortRequests, validateNote, missedSourceKey, missedCheckins, notifyAudience, knowsRequestAudience, checkinDateFor,
       supervisesCareCircle, canManageProfile, profileSubjects, opensRequestsForOthers, takesOthersRequests,
+      inviteFailureLine,
     } from "./logic.js";
 
     document.getElementById("page-glyph").innerHTML = glyph("pulse-heart");
@@ -1128,24 +1129,22 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
           const res = await fetch(XC_INVITE, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: norm, name: name || undefined }) });
           if (res.status === 402) { entitled = false; return modalError("Adding external contacts needs an active plan."); }
           if (!res.ok) {
-            const d = await res.json().catch(() => ({}));
-            console.error("invite failed", res.status, d.error);
-            // The refusals a person can act on keep a line of their own.
-            return modalError(
-              res.status === 403 ? "Only adults can add external contacts."
-              : res.status === 429 ? "The household has reached this month’s email limit."
-              : res.status === 409 && /unsubscribed/i.test(d.error ?? "") ? "That address has unsubscribed from this household’s emails."
-              : res.status === 409 && /limit/i.test(d.error ?? "") ? "The household has reached its limit of external contacts. Remove one that is no longer needed first."
-              : "Couldn’t send the confirmation email.");
+            const d = await res.json().catch(() => null);
+            throw Object.assign(new Error(d?.error || `Invite failed (${res.status})`), { status: res.status, code: d?.code });
           }
           const { contact } = await res.json();
           if (contact) externalContacts.set(norm, { status: contact.status, name: contact.name || name || "" });
-        } catch { return modalError("Couldn’t send the confirmation email."); }
+        } catch (e) {
+          console.error("invite failed", e);
+          // The refusals a person can act on keep a line of their own (inviteFailureLine).
+          return modalError(inviteFailureLine(e));
+        }
       } else if (name && !externalContacts.has(norm)) {
         externalContacts.set(norm, { status: "pending", name });
       }
       modalEmails = [...modalEmails, norm];
       renderModalEmails();
+      return true;
     }
 
     const pendingProfileIds = {};
@@ -1258,8 +1257,12 @@ let searchQ = "";       // in-app search (see logic.js searchableFields)
       if (action === "add-external") {
         const emailEl = modalEl.querySelector('[data-el="ext-email"]');
         const nameEl = modalEl.querySelector('[data-el="ext-name"]');
-        inviteExternal(emailEl.value, nameEl.value.trim());
-        emailEl.value = ""; nameEl.value = "";
+        const typed = [emailEl.value, nameEl.value];
+        // Cleared only once the contact is added: a failed invite keeps what was typed.
+        void inviteExternal(typed[0], typed[1].trim()).then((added) => {
+          if (!added || emailEl.value !== typed[0] || nameEl.value !== typed[1]) return;
+          emailEl.value = ""; nameEl.value = "";
+        });
         return;
       }
       if (action === "pick-contact") return void inviteExternal(btn.dataset.email, btn.dataset.name || "");

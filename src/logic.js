@@ -537,3 +537,49 @@ export function takesOthersRequests(member, tenant = {}) {
   if (tenant.spaceKind === "roster") return tenant.isAdmin === true;
   return isAdultMember(member);
 }
+
+/**
+ * The line a failed write shows ("Refused, gone, or failed" in the app-template guide):
+ * "try again" only when retrying can work. `thing` and `action` are the app's own nouns
+ * ("contact", "send the confirmation email"). `found` is the caller's re-read after a write
+ * that changed nothing (or a 404/409): false = the row is gone, true = it is still there and
+ * the hub narrowed the write away from this member. A `forUser` error keeps the message the
+ * app wrote for it. Never shows hub text.
+ */
+export function failureLine(e, { action, thing, found } = {}) {
+  if (e?.forUser) return e.message;
+  if (e?.code === "UNIQUE_CONSTRAINT" || /UNIQUE constraint failed/i.test(String(e?.message ?? ""))) return `That ${thing} already exists.`;
+  if (e?.status === 403) return `You don’t have permission to ${action}.`;
+  if (e?.status === 507) return "The household’s storage is full — free up space first.";
+  if (found === false || (found === undefined && e?.status === 404)) return `This ${thing} has been removed.`;
+  if (found === true) return `You don’t have permission to ${action}.`;
+  if (e?.status === 409 || e?.status === 404) return `This ${thing} was changed by someone else — check it first.`;
+  if (e?.status === 429) return "Too many tries — wait a minute and try again.";
+  return `Couldn’t ${action} — try again.`;
+}
+
+/**
+ * The line a failed external-contact invite (POST api/external-contacts/invite) shows.
+ * The hub's refusals a person can act on get a line of their own: 403 is its adult gate,
+ * 429 only ever its monthly email quota, and a 409 names its refusal with `code` —
+ * `unsubscribed`, `contact_limit`, or `contact_changed` (a lost race with another invite
+ * of the same address; retrying works). Any other failure is a 500 and says "try again".
+ * An older hub answered 409 with no `code` for every throw of its invite, so a codeless
+ * 409 is told apart by the error's text — only to pick one of these lines, never shown —
+ * and any other codeless 409 says "try again". The rest follows `failureLine`. (402, a
+ * plan the household lacks, is the caller's: it also hides the invite form.)
+ */
+export function inviteFailureLine(e) {
+  const text = String(e?.message ?? "");
+  const unsubscribed = "That address has unsubscribed from this household’s emails.";
+  const atLimit = "The household has reached its limit of external contacts. Remove one that is no longer needed first.";
+  if (e?.status === 403) return "Only adults can add external contacts.";
+  if (e?.status === 429) return "The household has reached this month’s email limit.";
+  if (e?.code === "unsubscribed") return unsubscribed;
+  if (e?.code === "contact_limit") return atLimit;
+  if (e?.code === "contact_changed") return "Couldn’t send the confirmation email — try again.";
+  if (e?.status === 409 && !e?.code && /unsubscribed/i.test(text)) return unsubscribed;
+  if (e?.status === 409 && !e?.code && /limit/i.test(text)) return atLimit;
+  if (e?.status === 409) return "Couldn’t send the confirmation email — try again.";
+  return failureLine(e, { action: "send the confirmation email", thing: "contact" });
+}
